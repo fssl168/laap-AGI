@@ -8,9 +8,9 @@ Design:
   - Cosine-similarity top-k retrieval
 
 Default provider priority:
-  1. OPENAI_API_KEY / DEEPSEEK_API_KEY -> OpenAI-compatible embedding API
+  1. OPENAI_API_KEY (or DEEPSEEK_API_KEY + OPENAI_BASE_URL) -> OpenAI-compatible embedding API
   2. sentence-transformers local model (if installed)
-  3. Keyword fallback
+  3. Pure-numpy TF-IDF fallback
 """
 
 import hashlib
@@ -370,7 +370,14 @@ def _get_vector_db_backend(path: Path) -> MemoryBackend:
 
 def _get_embedding_provider() -> EmbeddingProvider:
     """Return best available embedding provider."""
-    if os.environ.get("OPENAI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY"):
+    # API embeddings only make sense with a real OpenAI key, or a DeepSeek-style
+    # key pointed at an explicit OpenAI-compatible base_url. A bare DEEPSEEK_API_KEY
+    # against the default api.openai.com base is always invalid (401) and would
+    # silently kill every recall — so skip the API provider in that case.
+    has_api_key = os.environ.get("OPENAI_API_KEY") or (
+        os.environ.get("DEEPSEEK_API_KEY") and os.environ.get("OPENAI_BASE_URL")
+    )
+    if has_api_key:
         try:
             return OpenAIEmbeddingProvider()
         except Exception as e:

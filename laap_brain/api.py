@@ -19,7 +19,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     from aiohttp import web
@@ -99,6 +99,20 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
             "content": "I sense your presence but I cannot parse your message.",
             "engine": "laap-core",
         }
+
+    # ── Step 0: 工具调用结果回填（OpenAI 兼容 tools 轮次）──
+    try:
+        from laap_brain.tools import summarize_tool_result, collect_tool_context
+
+        tool_summary = summarize_tool_result(messages)
+        if tool_summary:
+            return {"content": tool_summary, "engine": "tools:result"}
+
+        tool_ctx = collect_tool_context(messages)
+        if tool_ctx:
+            user_msg = f"{tool_ctx}\n\n{user_msg}"
+    except Exception as e:
+        logger.debug(f"Tool context unavailable: {e}")
 
     # ── Step 1: Cognitive Bridge ──
     try:
@@ -183,6 +197,7 @@ async def handle_chat_completions(request):
     messages = body.get("messages", [])
     model = body.get("model", "laap-core")
     stream = body.get("stream", False)
+    tools = body.get("tools") or []
 
     request_id = f"laap-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
@@ -190,6 +205,96 @@ async def handle_chat_completions(request):
     result = process_with_laap(messages, model)
     content = result.get("content", "")
     engine = result.get("engine", "laap-core")
+
+    # ── OpenAI 兼容工具调用：AGI 认知层决策（含 PSI 状态 + 语义记忆）──
+    tool_calls = None
+    response_extra: Dict = {}
+    if tools:
+        try:
+            from laap.agi.tool_router import get_router
+
+            last_user = next(
+                (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
+                "",
+            )
+
+            # PSI 认知状态（情感 / 自信度 / 需求）→ 影响决策阈值
+            psi_state: Dict = {}
+            psi_path = STATE_DIR / "latest.json"
+            if psi_path.exists():
+                try:
+                    psi = json.loads(psi_path.read_text(encoding="utf-8"))
+                    psi_state = {
+                        "emotion": psi.get("emotion", "neutral"),
+                        "confidence": psi.get("confidence", 0.5),
+                        "needs": psi.get("needs", {}),
+                    }
+                except Exception:
+                    pass
+
+            # 语义记忆上下文 → 相关意图域加分
+            memory_context: List[str] = []
+            try:
+                sys.path.insert(0, str(BRAIN_DIR))
+                import laap_semantic_memory as sem
+
+                hits = sem.recall_memory(last_user, top_k=3) or []
+                memory_context = [h.get("text", "") for h in hits if h.get("text")]
+            except Exception:
+                pass
+
+            # 工具结果轮次（最后一条是 role=tool）：排除已执行工具，驱动阶段推进；
+            # 全部执行完 → 不再发新调用（返回 tools:result 摘要收尾）
+            candidate_tools = tools
+            last_role = messages[-1].get("role") if messages else ""
+            if last_role == "tool":
+                # OpenAI 规范里 tool 消息没有 name 字段——用 tool_call_id 反查
+                # assistant 消息里的工具名（兼容 {"id","name","arguments"} 与
+                # {"id","type","function":{"name","arguments"}} 两种格式）
+                id_to_name: Dict[str, str] = {}
+                for m in messages:
+                    if m.get("role") != "assistant":
+                        continue
+                    for tc in m.get("tool_calls") or []:
+                        tid = tc.get("id") or ""
+                        tname = tc.get("name") or (tc.get("function") or {}).get("name") or ""
+                        if tid and tname:
+                            id_to_name[tid] = tname
+                executed = set()
+                for m in messages:
+                    if m.get("role") != "tool":
+                        continue
+                    name = m.get("name") or id_to_name.get(m.get("tool_call_id") or "")
+                    if name:
+                        executed.add(name)
+                candidate_tools = [
+                    t for t in tools
+                    if t.get("function", {}).get("name") not in executed
+                ]
+
+            routed = get_router().decide(
+                last_user,
+                candidate_tools,
+                psi_state=psi_state,
+                memory_context=memory_context,
+            )
+            if routed:
+                tool_calls = routed.tool_calls
+                engine = routed.engine
+                response_extra = {
+                    "tool_decision": {
+                        "threshold_used": routed.threshold_used,
+                        "cognition": routed.cognition,
+                    }
+                }
+        except Exception as e:
+            logger.debug(f"Tool routing failed: {e}")
+
+    finish_reason = "tool_calls" if tool_calls else "stop"
+    message = {"role": "assistant", "content": content}
+    if tool_calls:
+        message["content"] = None
+        message["tool_calls"] = tool_calls
 
     response = {
         "id": request_id,
@@ -199,26 +304,32 @@ async def handle_chat_completions(request):
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+                "message": message,
+                "finish_reason": finish_reason,
             }
         ],
         "usage": {
-            "prompt_tokens": sum(len(m.get("content", "")) for m in messages) // 4,
-            "completion_tokens": len(content) // 4,
+            "prompt_tokens": sum(len(m.get("content") or "") for m in messages) // 4,
+            "completion_tokens": len(content or "") // 4,
             "total_tokens": 0,
         },
         "engine": engine,
     }
+    if response_extra:
+        response.update(response_extra)
 
     if stream:
         async def stream_response():
             yield f"data: {json.dumps({'id': request_id, 'object':'chat.completion.chunk','created':created,'model':model,'choices':[{'index':0,'delta':{'role':'assistant'},'finish_reason':None}]})}\n\n"
-            for i in range(0, len(content), 10):
-                chunk = content[i : i + 10]
-                yield f"data: {json.dumps({'id': request_id, 'object':'chat.completion.chunk','created':created,'model':model,'choices':[{'index':0,'delta':{'content':chunk},'finish_reason':None}]})}\n\n"
-                await asyncio.sleep(0.02)
-            yield f"data: {json.dumps({'id': request_id, 'object':'chat.completion.chunk','created':created,'model':model,'choices':[{'index':0,'delta':{},'finish_reason':'stop'}]})}\n\n"
+            if tool_calls:
+                # 工具调用流式块：一次性给出完整 tool_calls（多数客户端可接受）
+                yield f"data: {json.dumps({'id': request_id, 'object':'chat.completion.chunk','created':created,'model':model,'choices':[{'index':0,'delta':{'tool_calls':tool_calls},'finish_reason':None}]})}\n\n"
+            else:
+                for i in range(0, len(content), 10):
+                    chunk = content[i : i + 10]
+                    yield f"data: {json.dumps({'id': request_id, 'object':'chat.completion.chunk','created':created,'model':model,'choices':[{'index':0,'delta':{'content':chunk},'finish_reason':None}]})}\n\n"
+                    await asyncio.sleep(0.02)
+            yield f"data: {json.dumps({'id': request_id, 'object':'chat.completion.chunk','created':created,'model':model,'choices':[{'index':0,'delta':{},'finish_reason':finish_reason}]})}\n\n"
             yield "data: [DONE]\n\n"
 
         resp = web.StreamResponse(

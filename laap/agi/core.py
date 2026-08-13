@@ -140,6 +140,9 @@ class AGIAgent:
         # ── Cognitive Bus (central nervous system) ──
         self.cognitive_bus: Optional[CognitiveBus] = None
 
+        # ── Tool Router (AGI 认知层工具决策) ──
+        self.tool_router = None  # lazy: laap.agi.tool_router.AGIToolRouter
+
         # ── Interaction tracking ──
         self.total_interactions = 0
         self.interaction_history: List[Dict[str, Any]] = []
@@ -251,8 +254,12 @@ class AGIAgent:
         return sum(1 for m in [
             self.world, self.self_model, self.causal,
             self.analogical, self.learning, self.autonomy, self.conscious,
-            self.memory_system, self.evolution, self.security,
-            self.hermes, self.code_evolution, self.self_healing, self.quality_assurance, self.code_minimizer, self.agent_registry, self.task_board, self.safe_rollback,
+            getattr(self, "memory_system", None), getattr(self, "evolution", None),
+            getattr(self, "security", None), getattr(self, "hermes", None),
+            getattr(self, "code_evolution", None), getattr(self, "self_healing", None),
+            getattr(self, "quality_assurance", None), getattr(self, "code_minimizer", None),
+            getattr(self, "agent_registry", None), getattr(self, "task_board", None),
+            getattr(self, "safe_rollback", None),
             self.consciousness_harness, self.unified_memory,
         ] if m is not None)
 
@@ -644,7 +651,6 @@ class AGIAgent:
             "total_interactions": self.total_interactions,
             "modules": self._module_count(),
         }
-
         # Module states
         if self.world:
             state["world_model"] = self.world.stats()
@@ -681,6 +687,46 @@ class AGIAgent:
                 state["next_autonomous_action"] = next_action
 
         return state
+
+    def get_tool_router(self):
+        """Lazily create the AGI tool router (cognitive tool-call decision engine)."""
+        if self.tool_router is None:
+            from laap.agi.tool_router import AGIToolRouter
+
+            self.tool_router = AGIToolRouter()
+        return self.tool_router
+
+    def decide_tool_calls(
+        self,
+        user_msg: str,
+        tools: List[Dict[str, Any]],
+        tool_choice: object = "auto",
+        psi_state: Optional[Dict[str, Any]] = None,
+        memory_context: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """AGI 认知层工具调用决策入口。
+
+        融合 PSI 认知状态（情感/自信度/需求）与语义记忆上下文调整决策阈值，
+        返回 OpenAI 格式 tool_calls（无把握时返回 None）。
+
+        Returns:
+            {"tool_calls": [...], "engine": "agi:tool_router", "plan": ToolCallPlan} 或 None
+        """
+        router = self.get_tool_router()
+        plan = router.decide(
+            user_msg,
+            tools,
+            tool_choice=tool_choice,
+            psi_state=psi_state,
+            memory_context=memory_context,
+        )
+        if plan is None or not plan.tool_calls:
+            return None
+        return {
+            "tool_calls": plan.tool_calls,
+            "engine": plan.engine,
+            "plan": plan,
+        }
 
     def reflection(self) -> str:
         """Generate comprehensive self-reflection."""
