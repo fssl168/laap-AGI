@@ -110,6 +110,7 @@ class HermesIntegrator:
         self._emotion_engine = None
         self._psi_core = None
         self._psi_core_launcher = None
+        self._subconscious = None
         self._hermes_registry = None
 
         self._setup_paths()
@@ -189,6 +190,20 @@ class HermesIntegrator:
                     logger.info("PSI Core (Rust) binary not found — will use Python fallback")
             except Exception as e:
                 logger.debug(f"PSI Core unavailable: {e}")
+
+        # 量子潜意识 (V12.5 引擎)
+        if self.config.enable_subconscious:
+            try:
+                from aris_brain.aris_subconscious import QuantumSubconscious
+                self._subconscious = QuantumSubconscious(interval=5.0)
+                self._subconscious.start()
+                logger.info(
+                    "Subconscious loaded and started (V12.5 engine=%s markov=%s)",
+                    type(getattr(self._subconscious, "_engine", None)).__name__,
+                    type(getattr(self._subconscious, "_markov", None)).__name__,
+                )
+            except Exception as e:
+                logger.warning(f"Subconscious unavailable: {e}")
 
     # ── 工具注册 ──────────────────────────────────────────
 

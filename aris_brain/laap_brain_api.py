@@ -88,6 +88,12 @@ def get_laap_engine():
         from laap_integrator import get_integrator
         INTEGRATOR = get_integrator()
         results = INTEGRATOR.load_all()
+        # 启动后台线程（潜意识/V12.5 引擎、情感引擎等）— 否则模块只创建不运行
+        try:
+            bg = INTEGRATOR.start_background()
+            logging.info(f"LAAP Brain: background threads started: {bg}")
+        except Exception as bg_exc:
+            logging.warning(f"LAAP Brain: start_background failed ({bg_exc})")
         ENGINES_LOADED = True
         logging.info(f"LAAP Brain: {len(results.get('modules',[]))} modules loaded")
     except Exception as e:
