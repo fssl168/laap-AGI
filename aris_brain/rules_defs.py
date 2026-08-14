@@ -420,7 +420,7 @@ DEFAULT_RULES: List[Rule] = [
                 intent="pt_account_list",
                 description="列出所有paper_trading虚拟账户",
                 steps=[
-                    RuleStep(tool="pt_account_list", output_key="result"),
+                    RuleStep(tool="pt_account_list", params={}, output_key="result"),
                 ],
                 output_template="{result}",
             ),
@@ -450,7 +450,7 @@ DEFAULT_RULES: List[Rule] = [
                 intent="pt_strategy_list",
                 description="列出所有paper_trading策略",
                 steps=[
-                    RuleStep(tool="pt_strategy_list", output_key="result"),
+                    RuleStep(tool="pt_strategy_list", params={}, output_key="result"),
                 ],
                 output_template="{result}",
             ),
@@ -490,7 +490,7 @@ DEFAULT_RULES: List[Rule] = [
                 intent="pt_health",
                 description="检查paper_trading系统健康状态",
                 steps=[
-                    RuleStep(tool="pt_health", output_key="result"),
+                    RuleStep(tool="pt_health", params={}, output_key="result"),
                 ],
                 output_template="{result}",
             ),
