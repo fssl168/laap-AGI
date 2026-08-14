@@ -212,3 +212,20 @@ self.code_evolution = CodeEvolutionEngine(
 | 推荐路径 | **先上锁（M1+M3）再通电（M2）**；M4 谨慎、受限、可放弃 |
 
 > **一句话结论**：项目离 True RSI 比它自己声称的近得多——引擎已接好线，只差"通电"和"上锁"。但一个没有硬隔离的自修改系统不是进化，是风险。**先 M1 硬沙箱 + M3 审计治理，比实现"能改自己代码"重要一个数量级。**
+
+---
+
+## 6. 实施进度（2026-08 已实现 M1–M3）
+
+| 阶段 | 状态 | commit | 交付物 | 测试 |
+|---|---|---|---|---|
+| M1 硬隔离沙箱 | ✅ 完成 | `640fd87` | SandboxTester shell=False + 命令白名单 + shell 元字符拒绝 + 资源限制 + 审计日志；SafetyGuard PROTECTED_FILES 自保护 + shell=True 注入拦截 | +28 项单测 |
+| M2 闭环调度 | ✅ 完成 | `9fa88c4` | evolution_scheduler.py（周期 tick，daemon 线程，LAAP_EVO_ENABLED=1 开启）+ fitness.py（组合适应度：测试通过率 0.4/延迟 0.3/记忆召回 0.3）+ core.py 接线 | +8 项单测 |
+| M3 治理审计 | ✅ 完成 | `ed37ea5` | evolution_audit.py（JSONL 审计 + 冷却期）+ code_evolution 全决策点接入 + API `/v1/evo/audit` `/v1/evo/status` `/v1/evo/rollback` | +9 项单测 |
+| M4 受限递归 | ⏳ 未开始 | — | 允许进化改进业务代码、永久禁止改进安全代码；递归深度 ≤1 | — |
+
+**测试基线**: 277 → **322 passed / 0 failed**（M1+M2+M3 共 +45 项单测）。
+
+**启用方式**: `LAAP_EVO_ENABLED=1` 环境变量开启进化调度器（默认关闭）；
+`LAAP_EVO_INTERVAL=3600` 控制 tick 周期；审计日志在 `state/evolution_audit.jsonl`；
+部署仍默认不自动（`auto_deploy=False`），可通过 `/v1/evo/rollback` 人工回滚。
