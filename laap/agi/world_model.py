@@ -18,6 +18,9 @@ from .world_model_abstract import (
 )
 from .world_model_factory import _create_world_model_internal, create_world_model
 
+# CausalLink: world_models/* 后端所需的兼容类 (GAP-B 修复)
+from .world_model_defs import CausalLink
+
 __all__ = [
     "WorldModelType", "EntityType", "RelationType",
     "PhysicalProperties", "SpatialPos", "SocialAttributes",
@@ -25,6 +28,7 @@ __all__ = [
     "CommonsenseKnowledge", "UnifiedWorldModel",
     "AbstractWorldModel", "LocalWorldModel", "QuantumWorldModelAdapter",
     "_create_world_model_internal", "create_world_model",
+    "CausalLink",
 ]
 
 

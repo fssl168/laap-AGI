@@ -317,6 +317,24 @@ class CommonsenseKnowledge:
         return results[:10]
 
 
+@dataclass
+class CausalLink:
+    """因果链接 (GAP-B 修复: 原 world_models/* 后端引用的缺失类)。
+
+    openworldlib/hunyuan/lingbot 三个后端自创建起即引用本类,
+    但原 world_model.py 从未定义, 导致这些后端 import 一直失败
+    (被 world_models/__init__.py 的 try/except 静默降级为 None)。
+    按后端用法补齐: id/condition/effect/probability/confidence/domain/latency。
+    """
+    id: str = ""
+    condition: str = ""
+    effect: str = ""
+    probability: float = 0.5
+    confidence: float = 0.3
+    domain: str = ""
+    latency: float = 0.0
+
+
 # ═══════════════════════════════════════════════════════════════
 # 统一世界模型
 # ═══════════════════════════════════════════════════════════════
