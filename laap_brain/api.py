@@ -836,9 +836,27 @@ async def handle_root(request):
 # ── 启动 ─────────────────────────────────────────────────────
 
 
+@web.middleware
+async def auth_middleware(request, handler):
+    """可选 API Key 校验 (R7).
+
+    配置 LAAP_API_KEY 后, 除 / 与 /health 外的所有端点均需
+    `Authorization: Bearer <LAAP_API_KEY>`; 未配置时保持兼容 (默认仅本机可达)。
+    """
+    key = os.environ.get("LAAP_API_KEY", "")
+    if not key:
+        return await handler(request)
+    if request.path in ("/", "/health"):
+        return await handler(request)
+    auth = request.headers.get("Authorization", "")
+    if auth == f"Bearer {key}":
+        return await handler(request)
+    return web.json_response({"error": "unauthorized"}, status=401)
+
+
 def create_app() -> web.Application:
     """创建 LAAP Brain API 应用。"""
-    app = web.Application()
+    app = web.Application(middlewares=[auth_middleware])
     app.router.add_get("/", handle_root)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/models", handle_models)

@@ -61,6 +61,11 @@ _build_*.py
 _tmp*.txt
 _tmp*.py
 
+# ========== 会话/运行时产物 (隐私与状态) ==========
+_wx_*.txt
+aris_chat_history.json
+aris_mode.json
+
 # ========== Node ==========
 node_modules/
 psi_state.json
