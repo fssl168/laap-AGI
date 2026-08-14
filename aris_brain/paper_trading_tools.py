@@ -1,264 +1,270 @@
 # -*- coding: utf-8 -*-
 """
-paper_trading 工具包 — 让Aris接管全功能
+paper_trading 工具包 — LAAP内部实现
 
-所有工具通过调用 paper_trading/cli.py 的 dispatch() 实现，
-避免直接导入带来的依赖问题。
+直接操作paper_trading.db数据库（零账户概念，单系统）。
 """
 
-import sys, os, json, subprocess
+import sys, os, json
 from pathlib import Path
-from typing import Dict, Any, Optional
+from datetime import datetime
+import sqlite3
 
-# paper_trading 项目路径
-PT_ROOT = r"D:\leanpython\daily_stock_analysis"
-if PT_ROOT not in sys.path:
-    sys.path.insert(0, PT_ROOT)
+# LAAP paper_trading路径
+LAAP_ROOT = r"D:\laap-AGI"
+DB_PATH = r"D:\laap-AGI\data\paper_trading.db"
 
-CMD = r"D:\leanpython\daily_stock_analysis\paper_trading\cli.py"
+if LAAP_ROOT not in sys.path:
+    sys.path.insert(0, LAAP_ROOT)
 
 
-def _run_pt(args: list, timeout: int = 60) -> str:
-    """运行 paper_trading CLI，返回输出。"""
+def _db() -> sqlite3.Connection:
+    """获取数据库连接。"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _run(action: str, **kwargs) -> str:
+    """统一入口。"""
     try:
-        r = subprocess.run(
-            [sys.executable, CMD] + args,
-            capture_output=True, text=True, timeout=timeout,
-            cwd=PT_ROOT, encoding='utf-8', errors='replace'
-        )
-        out = r.stdout[-3000:] if len(r.stdout) > 3000 else r.stdout
-        err = r.stderr[-800:] if len(r.stderr) > 800 else r.stderr
-        return out + (f"\n[stderr]\n{err}" if err else "")
-    except subprocess.TimeoutExpired:
-        return "[超时]"
-    except FileNotFoundError:
-        return f"[错误] paper_trading/cli.py 不存在: {CMD}"
+        conn = _db()
+        if action == "health":
+            return _health(conn)
+        elif action == "account_list":
+            return "LAAP paper_trading无多账户概念，单系统运行"
+        elif action == "positions":
+            return _positions(conn)
+        elif action == "strategies":
+            return "策略信息在代码中定义，无独立策略表"
+        elif action == "backtest":
+            return _backtest(conn, kwargs.get("strategy", "default"))
+        elif action == "risk_check":
+            return _risk_check(conn)
+        elif action == "performance":
+            return _performance(conn)
+        elif action == "signals":
+            return _signals(conn)
+        elif action == "orders":
+            return _orders(conn)
+        elif action == "trades":
+            return _trades(conn)
+        elif action == "evolutions":
+            return _evolutions(conn)
+        else:
+            return f"未知操作: {action}"
     except Exception as e:
         return f"[错误] {e}"
 
 
-# ─── 账户管理 ──────────────────────────────────────────────
-
-def pt_account_list() -> str:
-    """列出所有虚拟账户。"""
-    return _run_pt(["account", "list"])
-
-
-def pt_account_create(name: str = "default") -> str:
-    """创建新虚拟账户。"""
-    return _run_pt(["account", "create", "--name", name])
-
-
-def pt_account_show(account_id: int) -> str:
-    """查看账户详情。"""
-    return _run_pt(["account", "show", "--account-id", str(account_id)])
-
-
-def pt_account_positions(account_id: int) -> str:
-    """查看账户持仓。"""
-    return _run_pt(["account", "positions", "--account-id", str(account_id)])
-
-
-def pt_account_orders(account_id: int) -> str:
-    """查看账户委托。"""
-    return _run_pt(["account", "orders", "--account-id", str(account_id)])
-
-
-def pt_account_trades(account_id: int) -> str:
-    """查看账户成交。"""
-    return _run_pt(["account", "trades", "--account-id", str(account_id)])
-
-
-def pt_account_signals(account_id: int) -> str:
-    """查看账户信号。"""
-    return _run_pt(["account", "signals", "--account-id", str(account_id)])
-
-
-def pt_account_netvalue(account_id: int) -> str:
-    """查看净值曲线。"""
-    return _run_pt(["account", "net-value", "--account-id", str(account_id)])
-
-
-def pt_account_delete(account_id: int) -> str:
-    """删除账户。"""
-    return _run_pt(["account", "delete", "--account-id", str(account_id)])
-
-
-# ─── 策略管理 ──────────────────────────────────────────────
-
-def pt_strategy_list() -> str:
-    """列出所有策略。"""
-    return _run_pt(["strategy", "list"])
-
-
-def pt_strategy_show(name: str) -> str:
-    """查看策略详情。"""
-    return _run_pt(["strategy", "show", "--name", name])
-
-
-def pt_strategy_scaffold(name: str) -> str:
-    """创建策略模板。"""
-    return _run_pt(["strategy", "scaffold", "--name", name])
-
-
-def pt_strategy_evaluate(name: str, account_id: int = 1) -> str:
-    """评估策略。"""
-    return _run_pt(["strategy", "evaluate", "--name", name, "--account-id", str(account_id)])
-
-
-def pt_strategy_import(file: str) -> str:
-    """导入策略文件。"""
-    return _run_pt(["strategy", "import", "--file", file])
-
-
-def pt_strategy_lifecycle(account_id: int) -> str:
-    """策略生命周期管理。"""
-    return _run_pt(["strategy", "lifecycle", "--account-id", str(account_id)])
-
-
-# ─── 回测分析 ──────────────────────────────────────────────
-
-def pt_backtest_run(strategy: str, account_id: int = 1, start: str = None, end: str = None) -> str:
-    """运行回测。"""
-    args = ["backtest", "run", "--strategy", strategy, "--account-id", str(account_id)]
-    if start:
-        args.extend(["--start", start])
-    if end:
-        args.extend(["--end", end])
-    return _run_pt(args)
-
-
-# ─── 实时监听 ──────────────────────────────────────────────
-
-def pt_listen_start(account_id: int = 1) -> str:
-    """启动实时监听。"""
-    return _run_pt(["listen", "start", "--account-id", str(account_id)])
-
-
-def pt_listen_stop(account_id: int = 1) -> str:
-    """停止实时监听。"""
-    return _run_pt(["listen", "stop", "--account-id", str(account_id)])
-
-
-def pt_listen_status(account_id: int = 1) -> str:
-    """查看监听状态。"""
-    return _run_pt(["listen", "status", "--account-id", str(account_id)])
-
-
-# ─── 订单操作 ──────────────────────────────────────────────
-
-def pt_order_submit(account_id: int, symbol: str, side: str, qty: float, price: float = 0.0, order_type: str = "limit") -> str:
-    """提交订单。"""
-    return _run_pt([
-        "order", "submit",
-        "--account-id", str(account_id),
-        "--symbol", symbol,
-        "--side", side,  # buy/sell
-        "--qty", str(qty),
-        "--price", str(price) if price else "0",
-        "--type", order_type  # limit/market
-    ])
-
-
-def pt_order_cancel(order_id: str, account_id: int = 1) -> str:
-    """撤销订单。"""
-    return _run_pt(["order", "cancel", "--order-id", order_id, "--account-id", str(account_id)])
-
-
-def pt_order_list(account_id: int = 1) -> str:
-    """查看订单列表。"""
-    return _run_pt(["order", "list", "--account-id", str(account_id)])
-
-
-# ─── 风控管理 ──────────────────────────────────────────────
-
-def pt_risk_check(account_id: int = 1) -> str:
-    """检查风控状态。"""
-    return _run_pt(["risk", "check", "--account-id", str(account_id)])
-
-
-def pt_risk_config(account_id: int = 1) -> str:
-    """查看风控配置。"""
-    return _run_pt(["risk", "config", "--account-id", str(account_id)])
-
-
-def pt_risk_snapshot(account_id: int = 1) -> str:
-    """获取风控快照。"""
-    return _run_pt(["risk", "snapshot", "--account-id", str(account_id)])
-
-
-# ─── 绩效分析 ──────────────────────────────────────────────
-
-def pt_performance(account_id: int = 1) -> str:
-    """查看绩效报告。"""
-    return _run_pt(["performance", "show", "--account-id", str(account_id)])
-
-
-def pt_performance_summary(account_id: int = 1) -> str:
-    """绩效摘要。"""
-    return _run_pt(["performance", "summary", "--account-id", str(account_id)])
-
-
-# ─── 系统健康 ──────────────────────────────────────────────
-
-def pt_health() -> str:
+def _health(conn) -> str:
     """系统健康检查。"""
-    return _run_pt(["health"])
+    try:
+        tables = ["signals", "orders", "trades", "net_values", "decisions", "outcomes", "evolutions"]
+        result = "系统状态:\n"
+        for t in tables:
+            cursor = conn.execute(f"SELECT COUNT(*) FROM {t}")
+            count = cursor.fetchone()[0]
+            result += f"  {t}: {count}条记录\n"
+        return result
+    except Exception as e:
+        return f"健康检查失败: {e}"
 
 
-def pt_system_status() -> str:
-    """系统状态概览。"""
-    return _run_pt(["status"])
+def _positions(conn) -> str:
+    """查看持仓（通过pending订单推断）。"""
+    try:
+        # 查找pending状态的订单
+        cursor = conn.execute("""
+            SELECT symbol, SUM(quantity) as total_qty, AVG(fill_price) as avg_price
+            FROM orders 
+            WHERE status = 'pending'
+            GROUP BY symbol
+        """)
+        rows = cursor.fetchall()
+        
+        # 同时检查trades表中未平仓的
+        cursor = conn.execute("""
+            SELECT symbol, SUM(quantity) as total_qty, entry_price
+            FROM trades 
+            WHERE exit_ts IS NULL
+            GROUP BY symbol
+        """)
+        open_trades = cursor.fetchall()
+        
+        if not rows and not open_trades:
+            return "暂无持仓"
+        
+        result = "当前持仓:\n"
+        for r in rows:
+            result += f"  {r[0]}: {r[1]}股 (均价{r[2]:.2f})\n"
+        for t in open_trades:
+            result += f"  {t[0]}: {t[1]}股 @ {t[2]:.2f}\n"
+        return result
+    except Exception as e:
+        return f"持仓查询失败: {e}"
+
+
+def _backtest(conn, strategy: str) -> str:
+    """运行回测。"""
+    try:
+        from laap.paper_trading.backtest_runner import run_backtest
+        result = run_backtest(strategy)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except ImportError:
+        return "回测模块未就绪，请检查配置"
+    except Exception as e:
+        return f"回测失败: {e}"
+
+
+def _risk_check(conn) -> str:
+    """风控检查。"""
+    try:
+        # 检查未平仓订单数量
+        cursor = conn.execute("SELECT COUNT(*) FROM orders WHERE status='pending'")
+        pending_count = cursor.fetchone()[0]
+        
+        # 检查今日交易数
+        cursor = conn.execute("""
+            SELECT COUNT(*) FROM trades 
+            WHERE date(entry_ts, 'unixepoch') = date('now')
+        """)
+        today_trades = cursor.fetchone()[0]
+        
+        return f"风控状态:\n  未平仓订单: {pending_count}个\n  今日交易: {today_trades}笔"
+    except Exception as e:
+        return f"风控检查失败: {e}"
+
+
+def _performance(conn) -> str:
+    """绩效报告。"""
+    try:
+        # 净值曲线最后一条
+        cursor = conn.execute("SELECT ts, total FROM net_values ORDER BY ts DESC LIMIT 1")
+        last = cursor.fetchone()
+        
+        # 总交易数
+        cursor = conn.execute("SELECT COUNT(*) FROM trades")
+        total_trades = cursor.fetchone()[0]
+        
+        # 总盈亏
+        cursor = conn.execute("SELECT SUM(pnl) FROM trades")
+        total_pnl = cursor.fetchone()[0] or 0
+        
+        result = f"绩效摘要:\n"
+        if last:
+            from datetime import datetime
+            ts = datetime.fromtimestamp(last[0]).strftime("%Y-%m-%d %H:%M")
+            result += f"  最新净值: {last[1]:.2f} ({ts})\n"
+        result += f"  总交易: {total_trades}笔\n"
+        result += f"  累计盈亏: {total_pnl:+.2f}"
+        return result
+    except Exception as e:
+        return f"绩效查询失败: {e}"
+
+
+def _signals(conn) -> str:
+    """信号列表。"""
+    try:
+        cursor = conn.execute("""
+            SELECT symbol, action, quantity, trigger_price, ts, rationale
+            FROM signals 
+            ORDER BY ts DESC 
+            LIMIT 10
+        """)
+        rows = cursor.fetchall()
+        if not rows:
+            return "暂无信号"
+        result = "最近10条信号:\n"
+        for r in rows:
+            from datetime import datetime
+            ts = datetime.fromtimestamp(r[4]).strftime("%H:%M:%S")
+            result += f"  [{ts}] {r[0]} {r[1]} {r[2]}股 @ {r[3]:.2f}\n"
+        return result
+    except Exception as e:
+        return f"信号查询失败: {e}"
+
+
+def _orders(conn) -> str:
+    """订单列表。"""
+    try:
+        cursor = conn.execute("""
+            SELECT id, signal_id, status, fill_price, filled_ts
+            FROM orders 
+            ORDER BY filled_ts DESC 
+            LIMIT 10
+        """)
+        rows = cursor.fetchall()
+        if not rows:
+            return "暂无订单"
+        result = "最近10条订单:\n"
+        for r in rows:
+            ts = datetime.fromtimestamp(r[4]).strftime("%H:%M:%S") if r[4] else "pending"
+            result += f"  {r[0]}: {r[2]} @ {r[3]:.2f} ({ts})\n"
+        return result
+    except Exception as e:
+        return f"订单查询失败: {e}"
+
+
+def _trades(conn) -> str:
+    """成交列表。"""
+    try:
+        cursor = conn.execute("""
+            SELECT symbol, side, quantity, entry_price, pnl, pnl_pct, hold_days
+            FROM trades 
+            ORDER BY entry_ts DESC 
+            LIMIT 10
+        """)
+        rows = cursor.fetchall()
+        if not rows:
+            return "暂无成交"
+        result = "最近10笔成交:\n"
+        for r in rows:
+            result += f"  {r[0]} {r[1]} {r[2]}股 @ {r[3]:.2f}, 盈亏{r[4]:+.2f} ({r[5]:.1f}%) 持仓{r[6] or 0}天\n"
+        return result
+    except Exception as e:
+        return f"成交查询失败: {e}"
+
+
+def _evolutions(conn) -> str:
+    """演化记录。"""
+    try:
+        cursor = conn.execute("""
+            SELECT decision_id, symbol, action, pnl, hold_days, score
+            FROM evolutions 
+            ORDER BY ts DESC 
+            LIMIT 5
+        """)
+        rows = cursor.fetchall()
+        if not rows:
+            return "暂无演化记录"
+        result = "最近5条演化:\n"
+        for r in rows:
+            result += f"  {r[1]} {r[2]}: {r[3]:+.2f}, 持仓{r[4] or 0}天, 评分{r[5] or 0}\n"
+        return result
+    except Exception as e:
+        return f"演化查询失败: {e}"
 
 
 # ─── 工具注册表 ────────────────────────────────────────────
 
 PAPER_TRADING_TOOLS: Dict[str, Dict[str, Any]] = {
-    # 账户
-    "pt_account_list": {"fn": pt_account_list, "desc": "列出所有虚拟账户"},
-    "pt_account_create": {"fn": pt_account_create, "desc": "创建新虚拟账户 (参数: name)"},
-    "pt_account_show": {"fn": pt_account_show, "desc": "查看账户详情 (参数: account_id)"},
-    "pt_account_positions": {"fn": pt_account_positions, "desc": "查看账户持仓 (参数: account_id)"},
-    "pt_account_orders": {"fn": pt_account_orders, "desc": "查看账户委托 (参数: account_id)"},
-    "pt_account_trades": {"fn": pt_account_trades, "desc": "查看账户成交 (参数: account_id)"},
-    "pt_account_signals": {"fn": pt_account_signals, "desc": "查看账户信号 (参数: account_id)"},
-    "pt_account_netvalue": {"fn": pt_account_netvalue, "desc": "查看净值曲线 (参数: account_id)"},
-    "pt_account_delete": {"fn": pt_account_delete, "desc": "删除账户 (参数: account_id)"},
-    # 策略
-    "pt_strategy_list": {"fn": pt_strategy_list, "desc": "列出所有策略"},
-    "pt_strategy_show": {"fn": pt_strategy_show, "desc": "查看策略详情 (参数: name)"},
-    "pt_strategy_scaffold": {"fn": pt_strategy_scaffold, "desc": "创建策略模板 (参数: name)"},
-    "pt_strategy_evaluate": {"fn": pt_strategy_evaluate, "desc": "评估策略 (参数: name, account_id)"},
-    "pt_strategy_import": {"fn": pt_strategy_import, "desc": "导入策略文件 (参数: file)"},
-    "pt_strategy_lifecycle": {"fn": pt_strategy_lifecycle, "desc": "策略生命周期管理 (参数: account_id)"},
-    # 回测
-    "pt_backtest_run": {"fn": pt_backtest_run, "desc": "运行回测 (参数: strategy, account_id, start, end)"},
-    # 监听
-    "pt_listen_start": {"fn": pt_listen_start, "desc": "启动实时监听"},
-    "pt_listen_stop": {"fn": pt_listen_stop, "desc": "停止实时监听"},
-    "pt_listen_status": {"fn": pt_listen_status, "desc": "查看监听状态"},
-    # 订单
-    "pt_order_submit": {"fn": pt_order_submit, "desc": "提交订单 (参数: account_id, symbol, side, qty, price, order_type)"},
-    "pt_order_cancel": {"fn": pt_order_cancel, "desc": "撤销订单 (参数: order_id, account_id)"},
-    "pt_order_list": {"fn": pt_order_list, "desc": "查看订单列表"},
-    # 风控
-    "pt_risk_check": {"fn": pt_risk_check, "desc": "检查风控状态"},
-    "pt_risk_config": {"fn": pt_risk_config, "desc": "查看风控配置"},
-    "pt_risk_snapshot": {"fn": pt_risk_snapshot, "desc": "获取风控快照"},
-    # 绩效
-    "pt_performance": {"fn": pt_performance, "desc": "查看绩效报告"},
-    "pt_performance_summary": {"fn": pt_performance_summary, "desc": "绩效摘要"},
-    # 系统
-    "pt_health": {"fn": pt_health, "desc": "系统健康检查"},
-    "pt_system_status": {"fn": pt_system_status, "desc": "系统状态概览"},
+    "pt_health": {"fn": lambda: _run("health"), "desc": "系统健康检查"},
+    "pt_account_list": {"fn": lambda: _run("account_list"), "desc": "列出账户(LAAP单系统)"},
+    "pt_positions": {"fn": lambda: _run("positions"), "desc": "查看持仓"},
+    "pt_strategies": {"fn": lambda: _run("strategies"), "desc": "查看策略"},
+    "pt_backtest_run": {"fn": lambda strategy: _run("backtest", strategy=strategy), "desc": "运行回测"},
+    "pt_risk_check": {"fn": lambda: _run("risk_check"), "desc": "风控检查"},
+    "pt_performance": {"fn": lambda: _run("performance"), "desc": "绩效报告"},
+    "pt_signals": {"fn": lambda: _run("signals"), "desc": "信号列表"},
+    "pt_orders": {"fn": lambda: _run("orders"), "desc": "订单列表"},
+    "pt_trades": {"fn": lambda: _run("trades"), "desc": "成交列表"},
+    "pt_evolve": {"fn": lambda: _run("evolutions"), "desc": "演化记录"},
 }
 
 
 def register_paper_trading_tools(registry) -> int:
-    """
-    将 paper_trading 工具注册到 ARIS 规则引擎。
-    返回注册的工具数量。
-    """
+    """注册工具到 ARIS 规则引擎。"""
     count = 0
     for name, info in PAPER_TRADING_TOOLS.items():
         registry.register(name, info["fn"], info["desc"])
@@ -267,9 +273,13 @@ def register_paper_trading_tools(registry) -> int:
 
 
 if __name__ == "__main__":
-    # 测试：直接运行
-    print("paper_trading_tools.py 加载成功")
-    print(f"共注册 {len(PAPER_TRADING_TOOLS)} 个工具")
-    print("\n可用工具:")
-    for name in sorted(PAPER_TRADING_TOOLS.keys()):
-        print(f"  - {name}: {PAPER_TRADING_TOOLS[name]['desc']}")
+    print("paper_trading_tools.py (LAAP版) 加载成功")
+    print(f"共注册 {len(PAPER_TRADING_TOOLS)} 个工具\n")
+    for name, info in sorted(PAPER_TRADING_TOOLS.items()):
+        print(f"  {name}: {info['desc']}")
+    
+    print("\n===测试调用===")
+    for name in ["pt_health", "pt_positions", "pt_performance", "pt_signals"]:
+        fn = PAPER_TRADING_TOOLS[name]["fn"]
+        print(f"\n{name}:")
+        print(fn()[:200])
