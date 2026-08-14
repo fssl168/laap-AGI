@@ -229,3 +229,23 @@ self.code_evolution = CodeEvolutionEngine(
 **启用方式**: `LAAP_EVO_ENABLED=1` 环境变量开启进化调度器（默认关闭）；
 `LAAP_EVO_INTERVAL=3600` 控制 tick 周期；审计日志在 `state/evolution_audit.jsonl`；
 部署仍默认不自动（`auto_deploy=False`），可通过 `/v1/evo/rollback` 人工回滚。
+
+---
+
+## 6.1 审计补强（2026-08-14 复核报告落地）
+
+按 §3 方案复核后补齐实施差距，测试基线 322 → **346 passed / 0 failed**（+19 项治理单测，另 5 项 EVO API 测试默认跳过）：
+
+| 缺口 | 补强内容 | 落地位置 |
+|---|---|---|
+| M3: `POST /v1/evo/deploy` 缺失 | 新增人工批准部署 API：`{"mutation_id": "<id>", "approver": "<可选>"}` → 批准落审计 → 部署 → 落 deployed 审计；未知 id 409/not_found、非 test_passed 状态 409/not_approvable、失败 409/deploy_failed | `laap_brain/api.py` `handle_evo_deploy` + 路由注册；`code_evolution.py` `approve_and_deploy` |
+| M3: `auto_deploy` 无授权检查 | `_improve_single` 中 `auto_deploy=True` 但 `mutation.approved=False` → 返回 `awaiting_approval` 并写审计，不部署 | `code_evolution.py` Step 5 授权门 |
+| M3: evo 端点各自新建引擎 | 引擎单例 `_get_code_evolution_engine()`：优先复用调度器持有的引擎，保证 mutations 历史跨 `/v1/evo/*` 可见（原实现每次新建引擎 → rollback/deploy 永远找不到历史 mutation） | `laap_brain/api.py` |
+| M1: `_quick_validate` 无 import 白名单 | 新增 `_validate_imports`：AST walk 校验 import，仅允许 stdlib + `laap` 前缀，拒绝相对导入/任意第三方包（`import pandas`、`from . import x` 均拦截） | `code_evolution.py` `_validate_imports` + `_quick_validate` 接入 |
+| M1: 沙箱无只读语义 | `test_mutation` 写入 mutated code 后对沙箱内文件 `chmod 0o444`（测试子进程不能改写被测试文件） | `code_evolution.py` `test_mutation` |
+| M1: `restrict_resources` 参数缺失 | `SandboxTester.__init__` 增加 `restrict_resources: bool = True`；`_apply_limits` 尊重该开关（False 时跳过，测试/降级用） | `code_evolution.py` `SandboxTester` |
+| 顺带修复 | `code_evolution.py` 3 处 `class _Dumm<LOCAL_PATH_REDACTED>` 损坏字符串（工具脱敏误写盘）→ 恢复合法 `class _Dummy:`/`_SandboxTest:` 伪类包装 | `code_evolution.py` L186/L558/L749 |
+
+**新增测试**: `tests/test_evo_deploy_governance.py`（19 项）— 授权检查、approve_and_deploy 全分支（成功/未知 id/错误状态/部署失败）、import 白名单（stdlib/laap 放行、第三方/相对/函数体内拦截）、沙箱只读、`/v1/evo/deploy` 路由注册与 handler 校验。
+
+**运维要点**: 服务进程重启后 mutations 历史清空（内存态），`approve_and_deploy` 只能批准**本次进程内**产生的 mutation；跨进程的审计追溯走 `state/evolution_audit.jsonl` 只读查询。调度器启用时引擎单例与 `/v1/evo/*` 共用，tick 产生的 `awaiting_approval` 提案可直接用 deploy API 批准。

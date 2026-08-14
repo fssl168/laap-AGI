@@ -256,7 +256,9 @@ DEFAULT_RULES: List[Rule] = [
             ),
             Rule(
                 name="read_code",
-                patterns=["读取", "打开文件", "查看文件", "读文件", "看", "显示", "read", "open", "cat", "打印"],
+                # 收窄触发词: 移除宽泛的"看/显示"(易误触发, 如"看法""显示状态"),
+                # 仅保留明确"读文件/看代码"意图表达。
+                patterns=["读取文件", "打开文件", "查看文件", "读文件", "读取", "看代码", "看下代码", "看文件", "查看代码", "read file", "read the file", "open file", "open the file", "cat ", "print file"],
                 intent="read_file",
                 description="读取文件内容",
                 steps=[

@@ -46,6 +46,68 @@ logger = logging.getLogger("laap.api")
 _integrator: Optional[HermesIntegrator] = None
 _engines_loaded = False
 
+# M2 True RSI: 进化调度器单例 (服务链路持有, 与 AGIAgent 场景共用)
+_evolution_scheduler: Optional[Any] = None
+# M3 治理: 代码进化引擎单例 — 与调度器共用同一实例, 保证
+# mutations 历史在 /v1/evo/* 各端点间可见 (否则每次新建引擎,
+# rollback/deploy 永远找不到历史 mutation)。
+_code_evolution_engine: Optional[Any] = None
+
+
+def _get_code_evolution_engine() -> Optional[Any]:
+    """获取代码进化引擎单例 (M3)。
+
+    优先复用调度器持有的引擎 (LAAP_EVO_ENABLED=1 时), 否则懒创建。
+    """
+    global _code_evolution_engine
+    if _code_evolution_engine is not None:
+        return _code_evolution_engine
+    if _evolution_scheduler is not None:
+        engine = getattr(_evolution_scheduler, "engine", None)
+        if engine is not None:
+            _code_evolution_engine = engine
+            return engine
+    try:
+        sys.path.insert(0, str(BRAIN_DIR))
+        from laap.agi.code_evolution import CodeEvolutionEngine
+        _code_evolution_engine = CodeEvolutionEngine(repo_root=str(LAAP_ROOT))
+    except Exception as e:
+        logger.warning(f"CodeEvolutionEngine lazy init failed: {e}")
+        _code_evolution_engine = None
+    return _code_evolution_engine
+
+
+def _start_evolution_scheduler() -> Optional[Any]:
+    """启动代码进化调度器 (M2 True RSI)。
+
+    由 LAAP_EVO_ENABLED=1 显式开启 (默认关闭 — 代码级自改进是高危能力)。
+    服务链路 (python -m laap_brain.api) 与 AGIAgent 场景共用此入口,
+    避免调度器挂在 AGIAgent.__init__ 而服务进程从未实例化 agent 导致不生效。
+
+    Returns: 调度器实例 (未开启/失败时 None)。
+    """
+    global _evolution_scheduler
+    if _evolution_scheduler is not None:
+        return _evolution_scheduler
+    if os.environ.get("LAAP_EVO_ENABLED", "") != "1":
+        return None
+    try:
+        sys.path.insert(0, str(BRAIN_DIR))
+        from laap.agi.code_evolution import CodeEvolutionEngine
+        from laap.agi.evolution_scheduler import EvolutionScheduler
+        engine = CodeEvolutionEngine(repo_root=str(LAAP_ROOT))
+        _code_evolution_engine = engine  # M3: 引擎单例与调度器共用
+        _evolution_scheduler = EvolutionScheduler(
+            engine=engine,
+            interval_seconds=int(os.environ.get("LAAP_EVO_INTERVAL", "3600")),
+        )
+        _evolution_scheduler.start()
+        logger.info("EvolutionScheduler started (LAAP_EVO_ENABLED=1)")
+    except Exception as e:
+        logger.warning(f"EvolutionScheduler failed to start: {e}")
+        _evolution_scheduler = None
+    return _evolution_scheduler
+
 
 def get_integrator() -> Optional[HermesIntegrator]:
     """获取 LAAP 集成器单例。"""
@@ -843,9 +905,10 @@ async def handle_evo_status(request):
     """GET /v1/evo/status — 代码进化引擎状态 (M3 治理视图)。"""
     try:
         sys.path.insert(0, str(BRAIN_DIR))
-        from laap.agi.code_evolution import CodeEvolutionEngine
         from laap.agi.code_evolution import SafetyGuard
-        engine = CodeEvolutionEngine(repo_root=str(LAAP_ROOT))
+        engine = _get_code_evolution_engine()
+        if engine is None:
+            return web.json_response({"error": "internal error"}, status=500)
         return web.json_response({
             "status": "ok",
             "stats": engine.stats(),
@@ -860,9 +923,9 @@ async def handle_evo_status(request):
 async def handle_evo_rollback(request):
     """POST /v1/evo/rollback — 回滚最近一次部署的代码进化。"""
     try:
-        sys.path.insert(0, str(BRAIN_DIR))
-        from laap.agi.code_evolution import CodeEvolutionEngine
-        engine = CodeEvolutionEngine(repo_root=str(LAAP_ROOT))
+        engine = _get_code_evolution_engine()
+        if engine is None:
+            return web.json_response({"error": "internal error"}, status=500)
         result = engine.rollback_last()
         # 审计记录回滚
         if engine.audit is not None:
@@ -875,6 +938,34 @@ async def handle_evo_rollback(request):
         return web.json_response(result)
     except Exception as e:
         logger.warning(f"evo_rollback failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_evo_deploy(request):
+    """POST /v1/evo/deploy — 人工批准并部署一条已通过测试的 mutation (M3 治理)。
+
+    Body: {"mutation_id": "<id>", "approver": "<optional>"}
+    只有状态为 test_passed (含 awaiting_approval) 的 mutation 可被批准部署;
+    部署前落 audit approved 记录, 部署后落 deployed 记录。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    mutation_id = (body or {}).get("mutation_id", "")
+    if not mutation_id:
+        return web.json_response(
+            {"error": "mutation_id required"}, status=400)
+    try:
+        engine = _get_code_evolution_engine()
+        if engine is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        result = engine.approve_and_deploy(
+            mutation_id, approver=body.get("approver", "api"))
+        status_code = 200 if result.get("status") in ("deployed",) else 409
+        return web.json_response(result, status=status_code)
+    except Exception as e:
+        logger.warning(f"evo_deploy failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)
 
 
@@ -949,6 +1040,7 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/evo/audit", handle_evo_audit)
     app.router.add_get("/v1/evo/status", handle_evo_status)
     app.router.add_post("/v1/evo/rollback", handle_evo_rollback)
+    app.router.add_post("/v1/evo/deploy", handle_evo_deploy)
     return app
 
 
@@ -969,6 +1061,9 @@ def main():
     # Pre-warm LAAP engine
     logger.info("Pre-warming LAAP cognitive engines...")
     get_integrator()
+
+    # M2 True RSI: 启动代码进化调度器 (LAAP_EVO_ENABLED=1 时)
+    _start_evolution_scheduler()
 
     app = create_app()
     logger.info(f"LAAP Brain API starting on {host}:{port}")

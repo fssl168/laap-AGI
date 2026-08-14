@@ -186,7 +186,7 @@ class SafetyGuard:
             # Wrap in dummy class for indented methods (ast.parse requires top-level indent=0)
             test_code = mutation.mutated_code
             if test_code.startswith((' ', '\t')):
-                test_code = 'class _Dumm<LOCAL_PATH_REDACTED>' + test_code
+                test_code = 'class _Dummy:\n' + test_code
             ast.parse(test_code)
         except SyntaxError as e:
             return False, f"Syntax error in mutated code: {e}"
@@ -513,9 +513,11 @@ class SandboxTester:
     runs tests in a subprocess with timeout and restricted resources.
     """
 
-    def __init__(self, timeout: int = 30, max_memory_mb: int = 512):
+    def __init__(self, timeout: int = 30, max_memory_mb: int = 512,
+                 restrict_resources: bool = True):
         self.timeout = timeout
         self.max_memory_mb = max_memory_mb
+        self.restrict_resources = restrict_resources
         self.test_count = 0
 
     def test_mutation(self, mutation: CodeMutation,
@@ -556,8 +558,18 @@ class SandboxTester:
                 # Apply mutation — wrap in dummy class for standalone function validation
                 sandbox_code = mutation.mutated_code
                 if sandbox_code.startswith((' ', '\t')):
-                    sandbox_code = 'class _SandboxTes<LOCAL_PATH_REDACTED>' + sandbox_code
+                    sandbox_code = 'class _SandboxTest:\n' + sandbox_code
                 dest.write_text(sandbox_code, encoding='utf-8')
+
+                # M1 硬化: 沙箱目录只读语义 — 测试子进程不能改写被测试文件
+                # (防止 mutation 通过测试命令间接修改沙箱外的源文件)。
+                if self.restrict_resources:
+                    try:
+                        for f in sandbox.rglob("*"):
+                            if f.is_file():
+                                os.chmod(f, 0o444)
+                    except Exception:
+                        pass  # 只读尽力而为, 不阻断测试
 
                 # Run tests
                 if test_commands:
@@ -672,7 +684,10 @@ class SandboxTester:
         POSIX: resource.setrlimit (RLIMIT_AS / RLIMIT_CPU)
         Windows: 通过 psutil 的内存限制 (若可用); 否则记录降级。
         超时已由 subprocess.run(timeout=...) 施加。
+        restrict_resources=False 时跳过 (测试/降级用)。
         """
+        if not self.restrict_resources:
+            return
         try:
             import resource
             mem_bytes = self.max_memory_mb * 1024 * 1024
@@ -698,6 +713,42 @@ class SandboxTester:
         except Exception:
             pass  # 审计日志失败不阻断测试
 
+    # M1 硬化: 受限导入检查 — 仅允许 stdlib + laap 包 (拒绝任意第三方/网络导入)
+    _STDLIB_MODULES = frozenset(getattr(sys, "stdlib_module_names", ()))
+    _ALLOWED_IMPORT_PREFIXES = ("laap",)
+
+    def _validate_imports(self, code: str) -> List[str]:
+        """解析 AST 中所有 import, 校验模块名 (M1 硬化)。
+
+        允许: Python stdlib 模块 + laap 包 (进化引擎自身依赖)。
+        拒绝: 任意第三方包 / 相对导入逃逸 / 绝对导入黑名单外模块。
+
+        Returns: 违规描述列表 (空 = 通过)。
+        """
+        errors: List[str] = []
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return errors  # 语法错误由 _quick_validate 主流程处理
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top = alias.name.split(".")[0]
+                    if top not in self._STDLIB_MODULES and \
+                            not alias.name.startswith(self._ALLOWED_IMPORT_PREFIXES):
+                        errors.append(
+                            f"import not in whitelist: {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                if node.level and node.level > 0:
+                    errors.append("relative import not allowed in sandbox")
+                    continue
+                mod = node.module or ""
+                top = mod.split(".")[0]
+                if top not in self._STDLIB_MODULES and \
+                        not mod.startswith(self._ALLOWED_IMPORT_PREFIXES):
+                    errors.append(f"import not in whitelist: {mod}")
+        return errors
+
     def _quick_validate(self, sandbox: Path,
                          mutation: CodeMutation) -> Dict[str, Any]:
         """Quick syntax + import validation."""
@@ -708,10 +759,13 @@ class SandboxTester:
         try:
             _check = mutation.mutated_code
             if _check.startswith((' ', '\t')):
-                _check = 'class _Dumm<LOCAL_PATH_REDACTED>' + _check
+                _check = 'class _Dummy:\n' + _check
             ast.parse(_check)
         except SyntaxError as e:
             errors.append(f"SYNTAX ERROR: {e}")
+
+        # M1 硬化: 受限导入检查 (仅 stdlib + laap)
+        errors.extend(self._validate_imports(mutation.mutated_code))
 
         # Try to compile
         py_file = list(sandbox.glob("*.py"))[0] if list(sandbox.glob("*.py")) else None
@@ -1070,8 +1124,22 @@ class CodeEvolutionEngine:
                         pass
                 return result
 
-        # Step 5: Deploy
+        # Step 5: Deploy (M3 治理: auto_deploy=True 时必须已授权)
         if auto_deploy:
+            if not mutation.approved:
+                mutation.status = MutationStatus.TEST_PASSED
+                result["status"] = "awaiting_approval"
+                result["deployed"] = False
+                result["mutation_id"] = mutation.id
+                result["diff_preview"] = mutation.unified_diff[:500]
+                if self.audit is not None:
+                    try:
+                        self.audit.record(
+                            mutation, "awaiting_approval",
+                            "auto_deploy requires explicit approval via /v1/evo/deploy")
+                    except Exception:
+                        pass
+                return result
             success, info = self.git.deploy(mutation)
             result["deployed"] = success
             result["commit"] = info if success else ""
@@ -1098,6 +1166,62 @@ class CodeEvolutionEngine:
             result["diff_preview"] = mutation.unified_diff[:500]
 
         return result
+
+    def approve_and_deploy(self, mutation_id: str,
+                           approver: str = "api") -> Dict[str, Any]:
+        """人工批准并部署一个已通过测试的 mutation (M3 治理)。
+
+        Args:
+            mutation_id: 待部署 mutation 的 id (awaiting_approval 状态)
+            approver: 批准人标识 (审计记录用)
+
+        Returns: {status, mutation_id, commit?, error?}
+        """
+        with self._lock:
+            target = None
+            for m in self.mutations:
+                if m.id == mutation_id:
+                    target = m
+                    break
+            if target is None:
+                return {"status": "not_found",
+                        "error": f"mutation {mutation_id} not found in history"}
+            if target.status != MutationStatus.TEST_PASSED:
+                return {"status": "not_approvable",
+                        "error": f"mutation {mutation_id} status is "
+                                 f"{target.status.value}, expected test_passed"}
+
+            # 批准落审计
+            target.approved = True
+            if self.audit is not None:
+                try:
+                    self.audit.record(
+                        target, "approved", f"approved by {approver} via /v1/evo/deploy")
+                except Exception:
+                    pass
+
+            # 执行部署
+            success, info = self.git.deploy(target)
+            if success:
+                self.deployed_count += 1
+                target.status = MutationStatus.DEPLOYED
+                if self.audit is not None:
+                    try:
+                        self.audit.record(
+                            target, "deployed", f"commit={info[:16]} (approved deploy)")
+                    except Exception:
+                        pass
+                return {"status": "deployed", "mutation_id": target.id,
+                        "commit": info}
+            target.status = MutationStatus.TEST_PASSED
+            if self.audit is not None:
+                try:
+                    self.audit.record(
+                        target, "rejected", f"deploy_failed after approval: {info[:120]}")
+                except Exception:
+                    pass
+            return {"status": "deploy_failed", "mutation_id": target.id,
+                    "error": info}
 
     def rollback_last(self) -> Dict[str, Any]:
         """Rollback the most recent deployed mutation."""
