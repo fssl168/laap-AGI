@@ -35,13 +35,31 @@ def test_record_decision_persists(db):
                           rationale="放量突破", basis_memories=["m1"],
                           risk_note="仓位≤5%", expected="+3%")
     conn = db.conn()
-    row = conn.execute("SELECT * FROM decisions WHERE trade_id=?",
-                       (rec.trade_id,)).fetchone()
+    row = conn.execute("SELECT * FROM decisions WHERE decision_id=?",
+                       (rec.decision_id,)).fetchone()
     conn.close()
     assert row["symbol"] == "600519"
     assert row["action"] == "buy"
     assert row["rationale"] == "放量突破"
     assert row["risk_note"] == "仓位≤5%"
+
+
+def test_close_position_links_decision_id(db, ledger):
+    """追溯链闭环：outcome.decision_id == record_decision.decision_id。"""
+    rec = record_decision(db, "600519", DecisionAction.BUY, rationale="x")
+    sig = PaperSignal(symbol="600519", action=DecisionAction.BUY,
+                      quantity=10, trigger_price=100.0)
+    order = ledger.submit_signal(sig, client_request_id=rec.decision_id)
+    trade = ledger.fill_order(order.id, fill_price=100.0)
+    outcome = close_position(db, ledger, trade.id, exit_price=95.0,
+                             decision_id=rec.decision_id)
+    assert outcome.decision_id == rec.decision_id
+    assert outcome.trade_id == trade.id  # PaperTrade.id 保留
+    conn = db.conn()
+    row = conn.execute("SELECT * FROM outcomes WHERE trade_id=?",
+                       (trade.id,)).fetchone()
+    conn.close()
+    assert row["decision_id"] == rec.decision_id
 
 
 def test_close_position_derives_lesson(db, ledger):

@@ -77,11 +77,12 @@ class QuantEvolutionEngine:
     """代码级受限递归编排（闭环 B）。"""
 
     def __init__(self, code_evo_engine: Any, runner: BacktestRunner,
-                 price_series: List[float], audit: Any = None):
+                 price_series: List[float], audit: Any = None, db: Any = None):
         self.engine = code_evo_engine
         self.runner = runner
         self.price_series = price_series
         self.audit = audit if audit is not None else getattr(code_evo_engine, "audit", None)
+        self.db = db
         self._scope_guard = QuantScopeGuard()
         self._deploy_gate = QuantEvolutionGate(runner, price_series)
 
@@ -94,19 +95,48 @@ class QuantEvolutionEngine:
 
     def evolve(self, max_mutations: int = 1) -> List[Dict[str, Any]]:
         """触发一轮受限进化：扫 paper_trading 业务代码 → 产提案（不自动部署）。"""
-        return self.engine.auto_improve(
+        results = self.engine.auto_improve(
             directory="laap/paper_trading/",
             max_mutations=max_mutations,
             auto_deploy=False,  # 走人工审批
             depth=0,
         )
+        # 审计双写：SQLite evolutions 表 + jsonl（EvolutionAuditLog）
+        for r in results:
+            self._audit_to_db(r.get("mutation_id", ""),
+                              r.get("status", "unknown"),
+                              r.get("reason", ""))
+        return results
 
     def approve_and_deploy(self, mutation_id: str, approver: str = "quant") -> Dict[str, Any]:
         """人工批准并部署一个 mutation。"""
-        return self.engine.approve_and_deploy(mutation_id, approver=approver)
+        result = self.engine.approve_and_deploy(mutation_id, approver=approver)
+        self._audit_to_db(mutation_id, result.get("status", "unknown"),
+                          result.get("error", ""))
+        return result
 
     def rollback_last(self) -> Dict[str, Any]:
         return self.engine.rollback_last()
+
+    def _audit_to_db(self, mutation_id: str, decision: str, reason: str) -> None:
+        """进化决策双写到 SQLite evolutions 表（决策 #3 审计）。"""
+        if self.db is None:
+            return
+        import json
+        import time as _time
+        try:
+            conn = self.db.conn()
+            conn.execute(
+                "INSERT OR REPLACE INTO evolutions "
+                "(mutation_id, decision, reason, meta_json, ts) VALUES (?, ?, ?, ?, ?)",
+                (mutation_id or "", decision, reason[:200] if reason else "",
+                 json.dumps({"mode": "quant-code-evolution"}, ensure_ascii=False),
+                 _time.time()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.warning(f"evolutions audit write failed: {e}")
 
     def stats(self) -> Dict[str, Any]:
         return {

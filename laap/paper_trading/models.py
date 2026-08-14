@@ -121,8 +121,12 @@ class PaperTrade:
 
 @dataclass
 class DecisionRecord:
-    """决策留痕（闭环 A 载体）——决策理由 + 依据记忆 + 风险提示。"""
-    trade_id: str
+    """决策留痕（闭环 A 载体）——决策理由 + 依据记忆 + 风险提示。
+
+    decision_id 是贯穿"决策→下单→成交→平仓→结果"的关联键（非成交 ID），
+    下单时作为 client_request_id 复用，平仓回填时用于关联 OutcomeRecord。
+    """
+    decision_id: str
     symbol: str
     action: DecisionAction
     ts: float = field(default_factory=time.time)
@@ -139,7 +143,7 @@ class DecisionRecord:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "DecisionRecord":
         return cls(
-            trade_id=d["trade_id"],
+            decision_id=d.get("decision_id", d.get("trade_id", "")),
             symbol=d["symbol"],
             action=DecisionAction(d.get("action", "buy")),
             ts=d.get("ts", time.time()),
@@ -152,8 +156,13 @@ class DecisionRecord:
 
 @dataclass
 class OutcomeRecord:
-    """结果回填（闭环 A 载体）——结果 + 教训，verified 防单笔噪声污染。"""
+    """结果回填（闭环 A 载体）——结果 + 教训，verified 防单笔噪声污染。
+
+    trade_id: PaperTrade.id（成交/持仓 ID）
+    decision_id: 关联 DecisionRecord.decision_id（追溯链闭环）
+    """
     trade_id: str
+    decision_id: str = ""
     pnl_pct: float = 0.0
     hold_days: int = 0
     vs_expected: str = ""          # hit / missed / neutral
@@ -168,6 +177,7 @@ class OutcomeRecord:
     def from_dict(cls, d: Dict[str, Any]) -> "OutcomeRecord":
         return cls(
             trade_id=d["trade_id"],
+            decision_id=d.get("decision_id", ""),
             pnl_pct=d.get("pnl_pct", 0.0),
             hold_days=d.get("hold_days", 0),
             vs_expected=d.get("vs_expected", ""),

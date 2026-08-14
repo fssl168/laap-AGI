@@ -41,35 +41,36 @@ class PaperClosedLoop:
                          risk_note: str = "") -> Dict[str, Any]:
         """一次完整"决策→下单→成交"（含记忆注入 + 决策留痕）。
 
-        1. 注入记忆 prompt（历史教训）
+        1. 注入记忆 prompt（历史教训）→ rationale 附带 [memory] 依据
         2. 决策留痕（decisions 表，basis_memories 关联记忆检索）
-        3. 下单（client_request_id = 决策键，幂等；注入记忆到 rationale）
+        3. 下单（client_request_id = 决策键，幂等；rationale 已含记忆，不重复注入）
         4. 成交（用 market 实时价）
         """
-        # 1. 记忆检索 + 注入
+        # 1. 记忆检索 + 注入（只此一处，避免与 submit_signal 重复注入）
         prompt = inject_memory_prompt(self.memory, symbol, action.value)
         basis = retrieve_for_symbol(self.memory, symbol, max_results=3)
         basis_ids = [str(b.get("id", "")) for b in basis if b.get("id")]
+        full_rationale = (rationale + "\n[memory]\n" + prompt).strip() if rationale else rationale
 
-        # 2. 决策留痕
+        # 2. 决策留痕（rationale 含记忆依据，与 signals.rationale 一致）
         rec = record_decision(
             self.db, symbol, action,
-            rationale=rationale, basis_memories=basis_ids,
+            rationale=full_rationale, basis_memories=basis_ids,
             risk_note=risk_note, expected=expected,
         )
 
-        # 3. 下单（client_request_id = 决策键，幂等；注入记忆）
+        # 3. 下单（client_request_id = 决策键，幂等；rationale 已含记忆，不重复注入）
         signal = PaperSignal(symbol=symbol, action=action, quantity=quantity,
-                             trigger_price=trigger_price, rationale=rationale)
+                             trigger_price=trigger_price, rationale=full_rationale)
         order = self.ledger.submit_signal(
-            signal, client_request_id=rec.trade_id, memory=self.memory)
+            signal, client_request_id=rec.decision_id, memory=None)
 
         # 4. 成交
         price, _meta = self.market.get_price(symbol)
         trade = self.ledger.fill_order(order.id, fill_price=price)
 
         return {
-            "decision": rec.to_dict(),
+            "decision_id": rec.decision_id,
             "order_id": order.id,
             "trade_id": trade.id,
             "fill_price": price,
@@ -77,10 +78,11 @@ class PaperClosedLoop:
         }
 
     def close_and_learn(self, trade_id: str, symbol: str,
-                        exit_price: float, expected: str = "") -> Dict[str, Any]:
-        """平仓 + 教训沉淀（outcomes 表 + UnifiedMemory）。"""
+                        exit_price: float, expected: str = "",
+                        decision_id: str = "") -> Dict[str, Any]:
+        """平仓 + 教训沉淀（outcomes 表 + UnifiedMemory），关联决策键。"""
         outcome = close_position(self.db, self.ledger, trade_id, exit_price,
-                                 expected=expected)
+                                 expected=expected, decision_id=decision_id)
         episode_id = encode_lesson(self.memory, outcome, symbol=symbol)
         return {"outcome": outcome.to_dict(), "episode_id": episode_id}
 

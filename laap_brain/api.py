@@ -1042,7 +1042,9 @@ def _get_quant_engine() -> Optional[Any]:
         n = 120
         price_series = [100.0 + i * 0.5 + ((i * 7) % 11 - 5) * 0.3 for i in range(n)]
         runner = BacktestRunner()
-        _quant_engine = QuantEvolutionEngine(engine, runner, price_series).attach()
+        db = _get_quant_db()
+        _quant_engine = QuantEvolutionEngine(
+            engine, runner, price_series, db=db).attach()
     except Exception as e:
         logger.warning(f"QuantEvolutionEngine lazy init failed: {e}")
         _quant_engine = None
@@ -1071,7 +1073,7 @@ async def handle_quant_decision_record(request):
             basis_memories=(body or {}).get("basis_memories"),
             risk_note=(body or {}).get("risk_note", ""),
             expected=(body or {}).get("expected", ""),
-            trade_id=(body or {}).get("trade_id"),
+            decision_id=(body or {}).get("decision_id"),
         )
         return web.json_response(rec.to_dict())
     except Exception as e:

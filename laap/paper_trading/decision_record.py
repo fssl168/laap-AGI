@@ -26,14 +26,15 @@ logger = logging.getLogger("laap.paper_trading.decision_record")
 def record_decision(db: PaperDB, symbol: str, action: DecisionAction,
                     rationale: str = "", basis_memories: Optional[List[str]] = None,
                     risk_note: str = "", expected: str = "",
-                    trade_id: Optional[str] = None) -> DecisionRecord:
+                    decision_id: Optional[str] = None) -> DecisionRecord:
     """决策留痕（落 decisions 表）。
 
     Args:
-        trade_id: 决策关联键（可后续下单 client_request_id 复用），缺省自动生成。
+        decision_id: 决策关联键（贯穿决策→下单→成交→平仓→结果），
+                     下单时作为 client_request_id 复用；缺省自动生成。
     """
     rec = DecisionRecord(
-        trade_id=trade_id or "dec_" + uuid.uuid4().hex[:12],
+        decision_id=decision_id or "dec_" + uuid.uuid4().hex[:12],
         symbol=symbol, action=action,
         rationale=rationale,
         basis_memories=list(basis_memories or []),
@@ -43,30 +44,33 @@ def record_decision(db: PaperDB, symbol: str, action: DecisionAction,
     try:
         conn.execute(
             "INSERT OR REPLACE INTO decisions "
-            "(trade_id, symbol, action, ts, rationale, basis_memories, risk_note, expected) "
+            "(decision_id, symbol, action, ts, rationale, basis_memories, risk_note, expected) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (rec.trade_id, rec.symbol, rec.action.value, rec.ts, rec.rationale,
+            (rec.decision_id, rec.symbol, rec.action.value, rec.ts, rec.rationale,
              str(rec.basis_memories), rec.risk_note, rec.expected),
         )
         conn.commit()
     finally:
         conn.close()
-    logger.info(f"record_decision: {symbol} {action.value} -> {rec.trade_id}")
+    logger.info(f"record_decision: {symbol} {action.value} -> {rec.decision_id}")
     return rec
 
 
 def close_position(db: PaperDB, ledger: PaperLedger, trade_id: str,
-                   exit_price: float, expected: str = "") -> OutcomeRecord:
+                   exit_price: float, expected: str = "",
+                   decision_id: str = "") -> OutcomeRecord:
     """平仓 + 回填 outcome + 提炼教训（落 outcomes 表）。
 
     Args:
         trade_id: PaperTrade.id（平仓目标）
         exit_price: 平仓价
-        expected: 决策时的预期（用于 vs_expected 判定），缺省 neutral
+        expected: 决策时的预期（用于 vs_expected 判定）
+        decision_id: 关联 DecisionRecord.decision_id（追溯链闭环）
     """
     trade: PaperTrade = ledger.close_trade(trade_id, exit_price)
     outcome = OutcomeRecord(
         trade_id=trade_id,
+        decision_id=decision_id,
         pnl_pct=trade.pnl_pct or 0.0,
         hold_days=trade.hold_days or 0,
         vs_expected=_vs_expected(trade.pnl_pct or 0.0, expected),
@@ -79,17 +83,17 @@ def close_position(db: PaperDB, ledger: PaperLedger, trade_id: str,
     try:
         conn.execute(
             "INSERT OR REPLACE INTO outcomes "
-            "(trade_id, pnl_pct, hold_days, vs_expected, lesson, lesson_type, verified) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (outcome.trade_id, outcome.pnl_pct, outcome.hold_days,
+            "(trade_id, decision_id, pnl_pct, hold_days, vs_expected, lesson, lesson_type, verified) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (outcome.trade_id, outcome.decision_id, outcome.pnl_pct, outcome.hold_days,
              outcome.vs_expected, outcome.lesson, outcome.lesson_type,
              int(outcome.verified)),
         )
         conn.commit()
     finally:
         conn.close()
-    logger.info(f"close_position: {trade_id} pnl={outcome.pnl_pct:.2%} "
-                f"lesson_type={lesson_type}")
+    logger.info(f"close_position: {trade_id} decision={decision_id} "
+                f"pnl={outcome.pnl_pct:.2%} lesson_type={lesson_type}")
     return outcome
 
 

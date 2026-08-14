@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS net_values (
 );
 
 CREATE TABLE IF NOT EXISTS decisions (
-    trade_id TEXT PRIMARY KEY,
+    decision_id TEXT PRIMARY KEY,
     symbol TEXT NOT NULL,
     action TEXT NOT NULL,
     ts REAL NOT NULL,
@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS decisions (
 
 CREATE TABLE IF NOT EXISTS outcomes (
     trade_id TEXT PRIMARY KEY,
+    decision_id TEXT DEFAULT '',
     pnl_pct REAL NOT NULL DEFAULT 0.0,
     hold_days INTEGER NOT NULL DEFAULT 0,
     vs_expected TEXT DEFAULT '',

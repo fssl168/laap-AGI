@@ -34,16 +34,19 @@ def test_memory_closed_loop_e2e(tmp_path):
         "600519", DecisionAction.BUY, 100, 100.0,
         rationale="放量突破 20 日线", expected="+5%", risk_note="仓位≤5%")
     trade_id = r1["trade_id"]
-    assert trade_id
+    decision_id = r1["decision_id"]
+    assert trade_id and decision_id
     # 决策留痕落库
     conn = db.conn()
     n_dec = conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
     conn.close()
     assert n_dec == 1
 
-    # 第 2 天：平仓（亏损 → short_term_chase 教训）
-    r2 = loop.close_and_learn(trade_id, "600519", exit_price=95.0, expected="+5%")
+    # 第 2 天：平仓（亏损 → short_term_chase 教训），关联决策键（追溯链闭环）
+    r2 = loop.close_and_learn(trade_id, "600519", exit_price=95.0,
+                              expected="+5%", decision_id=decision_id)
     assert r2["outcome"]["lesson_type"] == "short_term_chase"
+    assert r2["outcome"]["decision_id"] == decision_id  # 追溯链：决策键贯穿
     assert r2["episode_id"]  # 教训已沉淀进 UnifiedMemory
 
     # 第 3 天：再次决策 → 检索应命中历史教训（A-2 参与推理）

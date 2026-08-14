@@ -24,26 +24,38 @@ class MarketSource:
 
 
 class LiveMarketSource(MarketSource):
-    """真实源：akshare 轮询（A 股）+ Longbridge WS（可选，后续接）。"""
+    """真实源：akshare 轮询（A 股）+ Longbridge WS（可选，后续接）。
+
+    运行时降级：取价失败（网络/无数据）时回落到 Stub 合成价，显式 used_fallback。
+    """
+
+    def __init__(self, stub_fallback: Optional["StubMarketSource"] = None):
+        self._stub = stub_fallback or StubMarketSource()
 
     def get_price(self, symbol: str, ts: Optional[float] = None) -> Tuple[float, Dict[str, Any]]:
-        # 延迟导入：避免 akshare 未安装时影响包加载
+        try:
+            price, meta = self._live_price(symbol)
+            return price, meta
+        except Exception as e:
+            logger.warning(f"LiveMarketSource failed for {symbol}, fallback to stub: {e}")
+            price, meta = self._stub.get_price(symbol, ts)
+            meta["used_fallback"] = True
+            meta["fallback_reason"] = str(e)[:120]
+            return price, meta
+
+    def _live_price(self, symbol: str) -> Tuple[float, Dict[str, Any]]:
+        """akshare 单只实时买卖五档，取买一/卖一中间价（简化估值，非严格最新成交价）。"""
         try:
             import akshare as ak
         except ImportError as e:
             raise RuntimeError(f"akshare not installed: {e}") from e
 
-        # A 股单只实时买卖五档（比全市场快照轻量）
-        try:
-            df = ak.stock_bid_ask_em(symbol=symbol)
-            # 最新成交价 = 买一/卖一中间价（简化）
-            if df is not None and not df.empty:
-                bid = float(df.iloc[0].get("bid", 0) or 0)
-                ask = float(df.iloc[0].get("ask", 0) or 0)
-                if bid and ask:
-                    return (bid + ask) / 2, {"source": "akshare", "used_fallback": False}
-        except Exception as e:
-            logger.warning(f"LiveMarketSource akshare fetch failed for {symbol}: {e}")
+        df = ak.stock_bid_ask_em(symbol=symbol)
+        if df is not None and not df.empty:
+            bid = float(df.iloc[0].get("bid", 0) or 0)
+            ask = float(df.iloc[0].get("ask", 0) or 0)
+            if bid and ask:
+                return (bid + ask) / 2, {"source": "akshare", "used_fallback": False}
         raise RuntimeError(f"no live price for {symbol}")
 
 
