@@ -9,7 +9,9 @@ description = "LAAP — Lifeform Architecture for Autonomous Psyche. A cognitive
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 authors = [{ name = "Lorry Jovens" }]
-license = "BUSL-1.1"
+# 许可证: 分层策略见 LICENSING.md (核心引擎 BSL 1.1 → 2030 转 Apache; psi_core Apache-2.0)
+# pip 包本体以 Apache-2.0 发布, 完整许可文件随包分发 (license-files)
+license = "Apache-2.0"
 dependencies = [
     # Hermes Agent — the "body" infrastructure (tools, LLM providers, sessions)
     "hermes-agent",
@@ -28,6 +30,9 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 [project.scripts]
 laap-brain = "laap_brain.api:main"
 laap-aris = "aris_brain.aris_start_all:main"
+
+[tool.setuptools]
+license-files = ["LICENSE", "LICENSE.BSL", "LICENSING.md", "COMMERCIAL_LICENSE.md"]
 
 [tool.setuptools.packages.find]
 include = [
