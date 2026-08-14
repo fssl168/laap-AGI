@@ -78,6 +78,7 @@ audit_log.jsonl
 agi_state/
 data/
 voice_cache/
+paper_trading/
 .sync_backup/
 aris_brain/laap_semantic_memory.json
 aris_brain/memory_hierarchy.json
