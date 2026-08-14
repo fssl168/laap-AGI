@@ -72,3 +72,7 @@ audit_log.jsonl
 
 # ========== LAAP 运行时状态 ==========
 agi_state/
+data/
+voice_cache/
+.sync_backup/
+aris_brain/laap_semantic_memory.json

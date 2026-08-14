@@ -223,6 +223,7 @@ class JsonMemoryBackend(MemoryBackend):
     def recall(self, query_vec: np.ndarray, top_k: int, min_score: float) -> List[Tuple[float, Dict]]:
         memories = self.load()
         scores = []
+        now = datetime.now(timezone.utc).timestamp()
         for mem in memories:
             mem_vec = np.array(mem.get("embedding", []), dtype=np.float32)
             if mem_vec.size == 0 or query_vec.size == 0:
@@ -231,7 +232,26 @@ class JsonMemoryBackend(MemoryBackend):
                 continue
             score = float(np.dot(query_vec, mem_vec) / (np.linalg.norm(query_vec) * np.linalg.norm(mem_vec)))
             if score >= min_score:
-                scores.append((score, mem))
+                # 新鲜度加权：按天衰减，今天 > 昨天 > 前天 …
+                # 解决"多条同主题记录（如每日大盘）相似度相同 → 旧记录随机排前"问题。
+                try:
+                    ts = datetime.fromisoformat(str(mem.get("timestamp", ""))).timestamp()
+                except Exception:
+                    ts = 0.0
+                age_days = (now - ts) / 86400.0 if ts else 9999.0
+                if age_days < 1.0:
+                    recency = 0.10          # 今天
+                elif age_days < 2.0:
+                    recency = 0.06          # 昨天
+                elif age_days < 3.0:
+                    recency = 0.03          # 前天
+                elif age_days < 7.0:
+                    recency = 0.01          # 一周内
+                elif age_days < 30.0:
+                    recency = 0.005         # 一月内
+                else:
+                    recency = 0.0
+                scores.append((score + recency, mem))
         scores.sort(key=lambda x: x[0], reverse=True)
         return scores[:top_k]
 

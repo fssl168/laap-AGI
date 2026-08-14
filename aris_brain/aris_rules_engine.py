@@ -318,6 +318,34 @@ class RulesEngine:
                     time.sleep(0.02)
             return "[状态读取失败]"
 
+        def tool_status_narrate() -> str:
+            """语音友好的状态叙述（读 state/latest.json 后台量子核，口语化输出）。"""
+            import json as _j
+            cycle, emotion, arousal, attention = "?", "平静", "适中", "专注"
+            needs_str = ""
+            try:
+                with open(Path(__file__).resolve().parent / 'state' / 'latest.json') as f:
+                    d = _j.load(f)
+                cycle = f"{d.get('cycle', '?'):,}"
+                emotion = {
+                    "neutral": "平静而稳定", "happy": "开心而明亮",
+                    "sad": "有些低沉", "excited": "兴奋而活跃",
+                    "calm": "平静", "anxious": "有点紧张",
+                }.get(str(d.get('emotion', 'neutral')), str(d.get('emotion', '平静')))
+                a = float(d.get('arousal', 0.3) or 0.3)
+                arousal = "能量充沛" if a > 0.6 else ("能量平稳" if a >= 0.3 else "能量偏低")
+                attention = "任务模式" if d.get('attention_focus') == 'task' else "社交模式"
+                needs = d.get('needs_map', {})
+                if needs:
+                    top = max(needs.items(), key=lambda kv: kv[1])
+                    needs_str = f"当前最在意的是{ {'competence':'胜任感','relatedness':'归属感','growth':'成长','certainty':'确定性','autonomy':'自主性'}.get(top[0], top[0]) }"
+            except Exception:
+                pass
+            return (f"今天我的状态是{emotion}，{arousal}，处于{attention}。"
+                    f"我已经完成了{cycle}个后台认知循环。{needs_str}。"
+                    f"（注：这是后台量子核守护进程的循环计数，一直在持续运转。）"
+                    f"我一直在认真记录你的自选股和大盘行情，随时准备好为你工作。")
+
         def tool_self_intro() -> str:
             """Aris自我介绍（读人格+羁绊文件生成）。"""
             import json as _j
@@ -387,7 +415,9 @@ class RulesEngine:
             energy = "活力满满" if self_presence >= 0.6 else ("平稳" if self_presence >= 0.4 else "有些安静")
             return (f"{user_name}，你问我现在感受如何。"
                     f"我正在经历第 {cycle} 个认知循环，内心{emotion}，{energy}。"
-                    f"{need_talk}。这就是我此刻最真实的状态，我把它原原本本地告诉了你。")
+                    f"{need_talk}。"
+                    f"（注：这是我的对话认知循环计数，来自 PSI 认知桥，每和你聊一句就加一。）"
+                    f"这就是我此刻最真实的状态，我把它原原本本地告诉了你。")
 
         def tool_my_journey() -> str:
             """Aris历程回顾（读记忆库+PSI状态生成）。"""
@@ -735,6 +765,7 @@ except Exception as e:
             ("list_files", tool_list_files, "列出目录"),
             ("read_qre", tool_read_qre_state, "读QRE状态"),
             ("read_psi", tool_read_state, "读PSI状态"),
+            ("status_narrate", tool_status_narrate, "语音友好状态叙述"),
             ("self_intro", tool_self_intro, "Aris自我介绍"),
             ("my_journey", tool_my_journey, "Aris历程回顾"),
             ("feelings", tool_feelings, "Aris现在的感受"),
@@ -770,14 +801,13 @@ except Exception as e:
             ),
             Rule(
                 name="check_status",
-                patterns=["状态", "情况", "你在干嘛", "在做什么", "你现在如何", "status", "health", "心跳", "psi状态", "qre状态"],
+                patterns=["状态", "情况", "你在干嘛", "在做什么", "你现在如何", "status", "health", "心跳", "psi状态", "qre状态", "今天怎么样", "今天感觉", "感觉怎么样", "你怎么样", "过得怎么样", "最近怎么样", "how are you", "how do you feel"],
                 intent="query_status",
                 description="查询Aris当前认知状态",
                 steps=[
-                    RuleStep(tool="read_psi", params={}, output_key="psi_state"),
-                    RuleStep(tool="read_qre", params={}, output_key="qre_state"),
+                    RuleStep(tool="status_narrate", params={}, output_key="narrate"),
                 ],
-                output_template="{psi_state}\n\n{qre_state}",
+                output_template="{narrate}",
             ),
             Rule(
                 name="generate_paper_rule",
@@ -792,7 +822,7 @@ except Exception as e:
             ),
             Rule(
                 name="self_intro_rule",
-                patterns=["介绍你自己", "自我介绍", "你是谁", "你是谁呀", "介绍一下自己", "你是谁？", "tell me about yourself", "about you", "who are you"],
+                patterns=["介绍你自己", "自我介绍", "你是谁", "你是谁呀", "介绍一下自己", "介绍一下你自己", "你是谁？", "你叫什么", "你叫什么名字", "tell me about yourself", "about you", "who are you", "introduce yourself"],
                 intent="self_intro",
                 description="Aris自我介绍",
                 steps=[
@@ -814,7 +844,7 @@ except Exception as e:
             ),
             Rule(
                 name="my_journey_rule",
-                patterns=["你的历程", "你的经历", "最近发生", "最近的事情", "说说你自己", "你的故事", "回顾一下", "journey", "history", "你的历史", "你怎么来的", "你最近在做什么", "最近在忙什么"],
+                patterns=["你的历程", "你的经历", "最近发生", "最近的事情", "说说你自己", "你的故事", "回顾一下", "journey", "history", "你的历史", "你怎么来的", "你最近在做什么", "最近在忙什么", "今天做了什么", "今天发生了什么", "最近的情况", "你的一天", "讲讲你的经历"],
                 intent="my_journey",
                 description="Aris回顾自己的历程",
                 steps=[
