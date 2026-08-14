@@ -287,20 +287,20 @@ def register_default_tools(registry) -> None:
 
     def tool_generate_paper(topic: str = "", target_chars: int = 1500, structure: str = "paper") -> str:
         """生成论文/自我介绍。structure: paper|self_intro。"""
-        import subprocess as _sp, sys as _sys
+        import subprocess as _sp, sys as _s
         try:
             r = _sp.run([_sys.executable, '-c', f'''
 import sys; sys.path.insert(0, ".")
 import sys as _s; _s.path.insert(0, r"D:\\laap-AGI")
 try:
-from longform_synthesizer import LongFormSynthesizer
-s = LongFormSynthesizer()
-res = s.generate(topic="{topic[:50]}", structure="{structure}", target_chars={target_chars})
-print(str(res.get("output", ""))[:2000])
+    from longform_synthesizer import LongFormSynthesizer
+    s = LongFormSynthesizer()
+    res = s.generate(topic="{topic[:50]}", structure="{structure}", target_chars={target_chars})
+    print(str(res.get("output", ""))[:2000])
 except Exception as e:
-from aris_generator import generate
-r = generate(topic="{topic[:50]}", target_chars={target_chars}, include_causal=True)
-print(r["output"][:2000])
+    from aris_generator import generate
+    r = generate(topic="{topic[:50]}", target_chars={target_chars}, include_causal=True)
+    print(r["output"][:2000])
 '''], capture_output=True, text=True, timeout=25, cwd=str(Path(__file__).resolve().parent))
             return r.stdout[:2000] if r.stdout else r.stderr[:200]
         except _sp.TimeoutExpired:
