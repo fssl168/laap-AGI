@@ -1,5 +1,9 @@
 # To the Hermes / Nous Research Team
 
+> **📜 历史文档注记 (2026-08, GAP-E)**: 本文属于**理论/提案层**（CC BY-SA 内容），
+> 其中涉及的旧代码入口（如 `laap_brain_api.py`）已被统一收敛为
+> `laap_brain.api`（单一入口），本文保留原貌不作逐行改写，仅作历史参考。
+
 **Subject**: A proposal for Hermes Consciousness Engineering
 
 ---

@@ -56,8 +56,7 @@ dist/
 Thumbs.db
 
 # ========== 临时文件 ==========
-_gen_*.py
-_build_*.py
+# (根目录工作脚本已归档到 scripts/, _gen_*.py/_build_*.py 模式随脚本迁移移除)
 _tmp*.txt
 _tmp*.py
 

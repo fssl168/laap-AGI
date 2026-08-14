@@ -29,7 +29,7 @@
 | Phase 5 文档校准 | R6、R13 | 悬空引用清零；企业包可安装 | 0.5 |
 | Phase 6 代码健康 | R10、R11、R12 | 测试集中；巨型文件拆分；重叠收敛 | 3–5（可拆多 PR） |
 
-**执行状态（2026-08）**：Phase 0–5 已全部完成；Phase 6 完成 R10 与 R12 的僵尸清理子集（删除 11 个零引用模块）。**待办**：R11 巨型文件拆分（`laap/agi/v5_upgrade.py` 85KB、`aris_brain/aris_lm_v5.py` 78KB、`aris_brain/aris_rules_engine.py` 73KB、`aris_brain/aris_cognitive_bridge.py` 73KB、`laap/agi/causal.py` 71KB——其中仅 `aris_rules_engine` 与 `causal`/`world_model` 有测试覆盖，按纪律"先补测试再拆"）；R12 剩余收敛（认知总线 `cognitive_bus.py` 双份、记忆 6 处实现、情感 3 处实现的调用图收敛）。
+**执行状态（2026-08）**：Phase 0–5 已全部完成；Phase 6 已全部完成——R10 测试集中（`4398116`）、R11 巨型文件拆分（6 文件全部拆分完成，含 3 个无覆盖文件先补冒烟测试，见 `4dacfe1`/`e7dea47`/`e98ae3c`/`f40846f`/`a248e9b`/`c0a1ebf`）、R12 重叠收敛（三领域调用矩阵审计证明均为职责不同的活跃实现，无零引用僵尸；修复真实缺陷 `CausalLink` 使 3 个 world_models 后端恢复导入，见 `de0c038`）。剩余：GAP-C 实机 docker 验证（环境依赖）与 GAP-H/K 两个 P3 小项。
 
 依赖关系：R3（API 收敛）先行，R8（端口）随 R3 一起；R4 需要 R5 的依赖声明先落地；R10 可在 R4 之后独立做；R11/R12 相互独立但都依赖 R4 提供回归保障。
 

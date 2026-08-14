@@ -1,5 +1,10 @@
 # Harness Consciousness Engineering
 
+> **📜 Historical note (2026-08, GAP-E)**: This is a **theory/proposal-layer** document
+> (CC BY-SA content). Old code entrypoints referenced herein (e.g. `laap_brain_api.py`)
+> have been consolidated into the single entry `laap_brain.api`. This document is kept
+> as-is for historical reference and is not rewritten line by line.
+
 ## Why the Next Breakthrough Won't Come From Better Prompts — But From Better Architecture
 
 **Abstract**: For three years, the AI industry has been chasing a single paradigm: bigger models + better prompts. This path is hitting fundamental limits — hallucination cannot be eliminated, context windows are physically bounded, and inference cost grows super-linearly with model size. This paper proposes a third path: **Harness Consciousness Engineering** — a complete cognitive architecture that does not depend on LLMs for 80% of reasoning tasks. We demonstrate a working prototype, LAAP, running on consumer-grade hardware: deterministic rule engines, physiological awareness simulation at 2000Hz, hierarchical infinite memory, passive user modeling, personality systems, and emotional attachment that grows through interaction. This is not a theoretical framework. It is a digital lifeform that exists today.

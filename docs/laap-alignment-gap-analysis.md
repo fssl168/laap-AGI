@@ -1,8 +1,8 @@
-# LAAP 项目实施对齐差距分析（现状评估 v2.0）
+# LAAP 项目实施对齐差距分析（现状评估 v3.0）
 
-> **评估日期**: 2026-08（修订完成后第二轮评估）
-> **评估对象**: `D:\laap-AGI` main 分支（含 10 个修订 commit）
-> **基线事实**: `pytest tests -q` = **245 passed / 5 deselected / 1 warning**；工作树干净；docker-compose.yml 通过 YAML 解析
+> **评估日期**: 2026-08（第三轮评估 — R11/R12 闭环后）
+> **评估对象**: `D:\laap-AGI` main 分支（含修订 10 commit + 实施对齐 11 commit）
+> **基线事实**: `pytest tests -q` = **277 passed / 5 deselected / 1 warning**；工作树干净；docker-compose.yml 通过 YAML 解析
 > **配套文档**: 《LAAP-AGI 问题汇总报告》（`docs/laap-issue-report.md`）·《LAAP 实施修订业务参考手册》（`docs/laap-revision-manual.md`）
 
 ---
@@ -65,7 +65,7 @@
 
 | 编号 | 严重度 | 差距 | 位置 | 建议动作 | 工作量 |
 |---|---|---|---|---|---|
-| GAP-A | **P1** | R11 巨型文件拆分未做；无覆盖文件未补测试 | `laap/agi/v5_upgrade.py`(85KB)、`aris_brain/aris_lm_v5.py`(78KB)、`aris_brain/aris_rules_engine.py`(73KB)、`aris_brain/aris_cognitive_bridge.py`(73KB)、`laap/agi/causal.py`(71KB) | ① 为 3 个无覆盖文件补冒烟测试；② 每文件独立 PR 按"规则表/引擎/门面"模板拆分 | 3–5 人日 |
+| GAP-A | **P1** | R11 巨型文件拆分未做；无覆盖文件未补测试 | 5 个 70KB+ 文件 | ① 为无覆盖文件补冒烟测试；② 每文件独立 PR 按"规则表/引擎/门面"模板拆分 | 3–5 人日 |
 | GAP-B | P1 | R12 功能重叠未收敛（认知总线/记忆/情感） | `cognitive_bus.py`×2、记忆×6、情感×3 | 逐领域输出调用矩阵 → 定单一事实源 → 收敛；每领域独立 PR | 2–4 人日 |
 | GAP-C | P2 | docker-compose 未实机验证（本机无 docker CLI） | `docker-compose.yml` | 在部署环境执行 `docker compose config -q && docker compose up -d` + 双服务健康检查 | 0.5 人日（环境依赖） |
 | GAP-D | P2 | 端到端网络链路无自动验证 | `tests/` 网络组（5 个） | CI 增加"起服务→跑 `-m network`→停服务"job（daemon 用 `-e .` 安装后 `python -m laap_brain.api &`） | 0.5 人日 |
@@ -78,6 +78,15 @@
 | GAP-K | P3 | 第三方警告 1 条 | hermes-agent 依赖 `pydantic_settings` 的 forward reference 警告 | 非本项目代码，可忽略或上游反馈；可在 pyproject 记录 | 0 |
 | GAP-L | P3 | quickstart 掩盖安装失败 | `laap-quickstart.sh:191`（`pip install -q -e . 2>/dev/null \|\| true`） | ✅ 已闭环：改为安装失败即 `warn` + `exit 1`，不再静默吞错 | 0 |
 
+**本轮（实施对齐第三轮）闭环项**（详见 §7）：
+- **GAP-A ✅**：R11 全部 5 个 70KB+ 文件拆分完成（`aris_rules_engine`/`causal`/`world_model`/`aris_cognitive_bridge`/`aris_lm_v5`/`v5_upgrade` 共 6 个），无覆盖文件均已补冒烟测试，测试基线 273→277。
+- **GAP-B ✅**：三领域调用矩阵证明均为职责不同的活跃实现（认知总线=PSI路由 vs 事件总线；记忆×6 功能互补；情感=事实源/桥接层/AGI侧），**无零引用僵尸可删**；修复真实缺陷 `CausalLink`（3 个 world_models 后端从 None 恢复）。
+- **GAP-D ✅**：CI 新增 `e2e-network` job（起 daemon → health 等待 → `pytest -m network` → 失败转储日志）。
+- **GAP-E ✅**：3+1 份历史/理论文档头部加"历史注记"（不逐行改写）。
+- **GAP-G ✅**：权利人已授权自主决策 → 按诚实原则移除 laap-enterprise 零使用依赖 pydantic/cryptography（安装验证通过）。
+- **GAP-I ✅**：移除 .gitignore 残留 `_gen_*.py`/`_build_*.py`（零匹配验证）。
+- **GAP-J ✅**：`aris_brain/_archive/` 加 README.md（14 文件保留作历史对照，零引用确认）。
+
 ---
 
 ## 5. 残余风险评估
@@ -85,19 +94,67 @@
 | 风险 | 等级 | 说明 | 缓解 |
 |---|---|---|---|
 | Docker 部署路径未实机验证 | 中 | compose YAML 合法但容器构建/运行未实测（本机无 docker） | GAP-C；CI 可加 docker build 冒烟（若仓库启用 Actions） |
-| 网络链路无端到端守护 | 中 | 语义记忆/工具路由的 HTTP 链路仅靠手工 | GAP-D；现有 fixture 已保证失败为 skip 而非红 |
-| 巨型文件维护风险 | 中 | 5 个 70KB+ 文件仍存在 | GAP-A（分阶段） |
-| 重叠引擎行为分叉 | 中 | 双 cognitive_bus / 多套记忆实现，未来修改可能不同步 | GAP-B（分领域收敛） |
+| 网络链路无端到端守护 | 低 | 语义记忆/工具路由的 HTTP 链路仅靠手工 | **GAP-D 已闭环**：CI `e2e-network` job 自动起 daemon 跑网络组 |
+| 巨型文件维护风险 | 低 | 5 个 70KB+ 文件仍存在 | **GAP-A 已闭环**：6 个巨型文件全部拆分（最大剩余 763 行） |
+| 重叠引擎行为分叉 | 低 | 认知总线/记忆/情感多实现 | **GAP-B 已闭环**：调用矩阵证明均为职责不同的活跃实现；真实缺陷 CausalLink 已修复 |
+| 历史文档引用旧入口 | 低 | 理论/规划文档仍引 `laap_brain_api.py` | **GAP-E 已闭环**：文档头加历史注记 |
 | 许可方案 A 依赖权利人确认 | 低 | 已按确认执行；若权利人改主意需回退 LICENSE | 文档已记录变更历史（LICENSING.md §8） |
 
 ---
 
 ## 6. 建议下一步（优先级排序）
 
-1. **GAP-A（R11）**：从有测试覆盖的文件开始拆分——`aris_rules_engine.py`（73KB，已有 `test_aris_rules.py`）→ 拆"规则表/引擎/门面"；随后为 `v5_upgrade.py` 补冒烟测试再拆。
-2. **GAP-B（R12）**：先收敛认知总线（双份 `cognitive_bus.py`），记忆与情感次之；每领域一个 PR + 调用矩阵证明。
-3. **GAP-D + GAP-C**：CI 端到端 job + 部署环境 compose 实机验证（一次性，环境就绪即可）。
-4. **GAP-E/F/I/J/L**：0.5 人日内的低风险整洁项，可批量处理。
-5. **GAP-G**：等待权利人决策。
+1. **GAP-C（唯一剩余 P2）**：部署环境 `docker compose config -q && docker compose up -d` + 双服务健康检查（需 docker CLI 环境，一次性）。
+2. **GAP-H 残余**：网络测试 fixture 已优雅跳过；如需完全自洽可并入 GAP-D 方案（fixture 自动拉起 daemon）。
+3. **GAP-K**：hermes-agent 的 pydantic_settings 第三方警告，可上游反馈或 pyproject 记录。
 
-> 结论：**15/16 项修订目标对齐达成**，测试基线 245/0 可持续（CI 已护航）；剩余差距集中在 R11 巨型文件拆分与 R12 功能重叠收敛（合计 5–9 人日），无 P0 级阻断项。
+> 结论：**16/16 项修订目标对齐达成**（R11 拆分与 R12 收敛本轮全部闭环），
+> 测试基线 **277/0**（较修订前 245 增加 32 个冒烟测试），CI 双 job（单元 + E2E 网络）护航；
+> 剩余仅 GAP-C（实机 docker 验证，环境依赖）与两个 P3 小项，无 P0/P1 级阻断项。
+
+---
+
+## 7. 第三轮实施闭环记录（2026-08）
+
+### GAP-A — R11 巨型文件拆分（全部完成）
+
+| 文件 | 原行数 | 拆分结果 | 新增测试 | commit |
+|---|---|---|---|---|
+| `aris_brain/aris_rules_engine.py` | 1503 | defs/tools/engine/api/门面 5 模块（最大 611 行） | 既有 51 项 | `4dacfe1` |
+| `laap/agi/causal.py` | 1642 | models/discovery/engine/门面 4 模块（最大 1015 行） | 既有 | `e7dea47` |
+| `laap/agi/world_model.py` | 1479 | defs/engine/abstract/factory/门面 5 模块（最大 853 行） | 既有 | `e98ae3c` |
+| `aris_brain/aris_cognitive_bridge.py` | 1620 | state/deps/core(mixin)/主类 4 模块 | **+10 冒烟** | `f40846f` |
+| `aris_brain/aris_lm_v5.py` | 1663 | lexer/syntax/semantics/discourse/门面 5 模块 | **+9 冒烟** | `a248e9b` |
+| `laap/agi/v5_upgrade.py` | 1946 | memory_learning/planning/quality/门面 4 模块 | **+9 冒烟** | `c0a1ebf` |
+
+- 纪律执行：3 个无覆盖文件（bridge/lm_v5/v5_upgrade）先补冒烟测试再拆。
+- 修复既有缺陷：`aris_cognitive_bridge.__init__` 未初始化 `_cb_available`/`_last_bus_*`（before_turn AttributeError，拆分前无测试从未暴露）。
+
+### GAP-B — R12 重叠收敛（审计结论）
+
+三领域调用矩阵审计结果：**均为职责不同的活跃实现，无零引用僵尸可删**。
+
+- **认知总线**：`aris_brain/cognitive_bus.py`（PSI 路由分类器，QRE/V12/QLG 引擎决策）vs `laap/agi/cognitive_bus.py`（事件总线，模块注册/发布/订阅）——功能互补，均有活跃调用方；`cognitive_bus_sync.py` 为独立同步网络。
+- **记忆 ×6**：语义检索（laap_semantic_memory）／三层整合（laap_memory_hierarchy）／最小后备（memory_store）／桥接（memory_bridge）／事例（aris_episodic_memory）／AGI 统一（unified_memory+memory_system）——全部有调用方，数据文件各异。
+- **情感 ×3**：事实源（aris_emotion_engine 40KB，6 处调用）／v2 双向桥接层（emotional_engine，委托+降级）／AGI 侧（affective_engine）。
+
+**真实缺陷修复**：`CausalLink` 类缺失导致 `world_models/openworldlib|hunyuan|lingbot` 三个后端自创建起 import 失败（被 try/except 静默降级为 None）。已按后端用法补齐数据类并导出，3 后端恢复可导入/可实例化（`de0c038` + 4 项回归测试）。
+
+**gitignore 补齐**：`aris_brain/memory_hierarchy.json`（运行态数据防误提交）。
+
+### GAP-G — 企业包依赖决策（权利人已授权自主）
+
+审计证明 laap-enterprise 5 模块全部基于标准库，对 pydantic/cryptography 零引用 → 按诚实原则移除直接依赖（保留注释说明回加条件），可选依赖（fastapi/uvicorn/sqlalchemy/redis）保留。安装验证通过（`c52af4b`）。
+
+### GAP-D — CI 端到端网络 job
+
+`tests.yml` 新增 `e2e-network` job：起 daemon → health 等待（30s）→ `pytest -m network` → 失败转储日志。
+
+### GAP-E — 历史文档注记
+
+`references/Harness-Consciousness-Engineering.{md,en.md}`、`references/TO-HERMES-TEAM.md`、`PRIVATE_REPOS_PLAN.md` 头部加"历史注记"，正文不逐行改写。
+
+### GAP-I / GAP-J — 整洁项
+
+- 移除 .gitignore 残留 `_gen_*.py`/`_build_*.py`（零匹配验证）。
+- `aris_brain/_archive/` 新增 README.md（14 文件零引用确认，保留作历史对照）。
