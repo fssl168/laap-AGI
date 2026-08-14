@@ -8,20 +8,36 @@ version = "1.0.0"
 description = "LAAP — Lifeform Architecture for Autonomous Psyche. A cognitive engine that treats LLMs as a voice cortex, not a brain."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
-authors = [{ name = "Lorry Jovens" }]
+authors = [{ name = "Lorry Jovens", email = "maintainer@laap-agi.dev" }]
 # 许可证: 分层策略见 LICENSING.md (核心引擎 BSL 1.1 → 2030 转 Apache; psi_core Apache-2.0)
-# pip 包本体以 Apache-2.0 发布, 完整许可文件随包分发 (license-files)
+# pip 包本体以 Apache-2.0 发布, 完整许可文件随包分发 (license-files, PEP 639)
 license = "Apache-2.0"
+license-files = ["LICENSE", "LICENSE.BSL", "LICENSING.md", "COMMERCIAL_LICENSE.md"]
+keywords = ["agi", "cognitive-architecture", "digital-lifeform", "psi", "zero-llm", "hermes"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     # Hermes Agent — the "body" infrastructure (tools, LLM providers, sessions)
-    "hermes-agent",
+    "hermes-agent>=0.18.0,<0.19",
     # LAAP core — zero external LLM deps; pure cognitive architecture
     "aiohttp>=3.9.0,<4",
     "pyyaml>=6.0,<7",
     "python-dotenv>=1.0,<2",
     "psutil>=5.9,<8",
     "numpy>=1.24,<3",
+    # HTTP 客户端 (mcp_server / 语义记忆 / 服务管理实际使用, 已审计)
+    "requests>=2.31.0",
 ]
+
+[project.urls]
+Homepage = "https://laap-agi.netlify.app"
+Repository = "https://github.com/fssl168/laap-AGI"
+Documentation = "https://github.com/fssl168/laap-AGI/blob/main/README.md"
 
 [project.optional-dependencies]
 psi-core = []  # Rust PSI core (pip install from local path)
@@ -30,9 +46,6 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 [project.scripts]
 laap-brain = "laap_brain.api:main"
 laap-aris = "aris_brain.aris_start_all:main"
-
-[tool.setuptools]
-license-files = ["LICENSE", "LICENSE.BSL", "LICENSING.md", "COMMERCIAL_LICENSE.md"]
 
 [tool.setuptools.packages.find]
 include = [
@@ -49,3 +62,8 @@ aris_brain = ["state/**/*", "corpus/**/*", "memory/**/*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "network: tests that require a live LAAP API at localhost:11546",
+]
+# 默认跳过网络测试 (依赖活 daemon); 显式运行: pytest -m network
+addopts = "-m 'not network'"

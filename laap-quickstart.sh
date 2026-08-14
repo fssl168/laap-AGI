@@ -186,11 +186,8 @@ case "$mode" in
             source .venv/Scripts/activate
         fi
 
-        info "安装核心依赖..."
+        info "安装核心依赖 (唯一事实源 pyproject.toml)..."
         pip install -q --upgrade pip
-        pip install -q flask requests numpy aiohttp
-
-        # 尝试安装包本身（允许失败）
         pip install -q -e . 2>/dev/null || true
 
         info "启动 LAAP Brain API (端口 11546)..."

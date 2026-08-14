@@ -26,9 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 复制依赖声明
 COPY requirements.txt pyproject.toml ./
 
-# 安装核心依赖（忽略 optional 注释）
-RUN pip install --no-cache-dir flask requests numpy aiohttp && \
-    pip install --no-cache-dir -e . 2>/dev/null || true
+# 安装核心依赖（唯一事实源: pyproject.toml）
+RUN pip install --no-cache-dir -e .
 
 # ── Stage 2: 生产镜像 ─────────────────────────────────────
 FROM python:3.13-slim
