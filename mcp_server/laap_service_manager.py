@@ -42,8 +42,10 @@ def start(timeout: int = 30) -> bool:
     env["LAAP_ROOT"] = str(LAAP_ROOT)
     env["PYTHONPATH"] = str(LAAP_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
 
+    # 本机服务默认只绑 127.0.0.1 (无认证 API 不应暴露到局域网; 需要远程访问时在 .env 设 LAAP_HOST=0.0.0.0)
+    host = os.environ.get("LAAP_HOST", "127.0.0.1")
     proc = subprocess.Popen(
-        [str(python_exe), str(LAAP_API_SCRIPT), "--port", str(LAAP_PORT)],
+        [str(python_exe), str(LAAP_API_SCRIPT), "--port", str(LAAP_PORT), "--host", host],
         cwd=str(LAAP_ROOT),
         env=env,
         stdout=subprocess.DEVNULL,

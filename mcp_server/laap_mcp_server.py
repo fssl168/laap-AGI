@@ -233,7 +233,7 @@ def _get_dominant_need(state: dict) -> str:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LAAP Brain MCP Server")
     parser.add_argument("--sse", action="store_true", help="Run in SSE mode")
-    parser.add_argument("--host", type=str, default="0.0.0.0", help="SSE host")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="SSE host (default 127.0.0.1; 无认证服务不应暴露到局域网)")
     parser.add_argument("--port", type=int, default=11547, help="SSE port")
     args = parser.parse_args()
 

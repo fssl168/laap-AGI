@@ -1073,6 +1073,7 @@ except Exception as e:
         #       保证 "你记得我刚才语音里说了什么吗?关于测试的" 能命中"测试"记忆。
         _RECALL_PREFIXES = ("我记得我", "记得我说", "我说过什么", "我之前说过", "我以前说",
                             "说了什么", "我刚才说", "回忆", "想起", "还记得", "记得我",
+                            "我记得", "跟你说了", "跟你说过", "告诉你过", "跟你讲过",
                             "查询一下记忆中", "查询一下记忆", "查一下记忆中", "查一下记忆",
                             "读取记忆里", "读取记忆中", "读取记忆", "记忆中", "记忆里",
                             "从记忆里", "从记忆中", "从记忆")
@@ -1093,8 +1094,13 @@ except Exception as e:
                             rest = rest[: -len(junk)].strip()
                             break
                     # 清理后无实质内容 → 用整句, 让语义检索自己找
-                    intent["params"]["query"] = (rest[:100] if len(rest) >= 2
-                                                 else text.strip()[:100])
+                    # 若 rest 只剩套话(如"之前跟你说过") 也回退整句, 避免丢关键线索
+                    _PURE_JUNK = ("之前跟你说过", "跟你说过", "跟你说了", "告诉你过",
+                                  "跟你说", "跟你讲", "之前", "以前")
+                    if len(rest) >= 2 and rest not in _PURE_JUNK:
+                        intent["params"]["query"] = rest[:100]
+                    else:
+                        intent["params"]["query"] = text.strip()[:100]
                     break
             else:
                 # 命中 recall_fact_rule 但没有任何前缀时 (如 "你记得...吗"),

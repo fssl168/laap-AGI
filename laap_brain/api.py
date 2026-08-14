@@ -368,6 +368,17 @@ async def handle_chat_completions(request):
     stream = body.get("stream", False)
     tools = body.get("tools") or []
 
+    # 输入防护: 消息数量与总长度上限, 防 token 洪泛 DoS
+    MAX_MESSAGES = 50
+    MAX_TOTAL_CHARS = 200_000
+    if not isinstance(messages, list) or not messages:
+        return web.json_response({"error": "messages must be a non-empty list"}, status=400)
+    if len(messages) > MAX_MESSAGES:
+        return web.json_response({"error": f"too many messages (max {MAX_MESSAGES})"}, status=400)
+    total_chars = sum(len(str(m.get("content", ""))) for m in messages if isinstance(m, dict))
+    if total_chars > MAX_TOTAL_CHARS:
+        return web.json_response({"error": f"message content too large (max {MAX_TOTAL_CHARS} chars)"}, status=400)
+
     request_id = f"laap-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
 
@@ -554,7 +565,7 @@ async def handle_cognitive_state(request):
         result = on_start(user_input)
         return web.json_response(result)
     except Exception as e:
-        return web.json_response({"error": str(e), "preamble": "", "cot_hint": "", "state": {}}, status=500)
+        return web.json_response({"error": "internal error", "preamble": "", "cot_hint": "", "state": {}}, status=500)
 
 
 async def handle_recall_memory(request):
@@ -565,7 +576,11 @@ async def handle_recall_memory(request):
         body = {}
 
     query = body.get("query", "") or body.get("input", "")
-    limit = int(body.get("limit", 5))
+    # limit 上限防护: 恶意超大 limit 会导致全量记忆向量计算 (内存 DoS)
+    try:
+        limit = max(1, min(int(body.get("limit", 5)), 50))
+    except (TypeError, ValueError):
+        limit = 5
 
     try:
         sys.path.insert(0, str(BRAIN_DIR))
@@ -588,7 +603,7 @@ async def handle_recall_memory(request):
 
         return web.json_response({"query": query, "count": len(semantic_results), "memories": semantic_results, "semantic": True})
     except Exception as e:
-        return web.json_response({"query": query, "count": 0, "memories": [], "error": str(e)}, status=500)
+        return web.json_response({"query": query, "count": 0, "memories": [], "error": "internal error"}, status=500)
 
 
 async def handle_reflect(request):
@@ -617,7 +632,7 @@ async def handle_reflect(request):
 
         return web.json_response({"updated": True})
     except Exception as e:
-        return web.json_response({"error": str(e), "updated": False}, status=500)
+        return web.json_response({"error": "internal error", "updated": False}, status=500)
 
 
 async def handle_express(request):
@@ -635,7 +650,7 @@ async def handle_express(request):
                 result = on_start(body.get("input", ""))
                 state = result.get("state", {})
             except Exception as e:
-                return web.json_response({"error": str(e)}, status=500)
+                return web.json_response({"error": "internal error"}, status=500)
         else:
             return web.json_response({"error": "PSI adapter unavailable"}, status=503)
 
@@ -646,7 +661,7 @@ async def handle_express(request):
         expression["prompt"] = get_expressive_prompt(state)
         return web.json_response(expression)
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"error": "internal error"}, status=500)
 
 
 async def handle_bootstrap(request):
@@ -699,7 +714,7 @@ async def handle_get_personality(request):
             return web.json_response(p)
         return web.json_response({"error": "No personality configured"}, status=404)
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"error": "internal error"}, status=500)
 
 
 async def handle_set_personality(request):
@@ -716,7 +731,7 @@ async def handle_set_personality(request):
         save_personality(p)
         return web.json_response({"status": "updated", "personality": p})
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"error": "internal error"}, status=500)
 
 
 async def handle_get_bond(request):
@@ -729,7 +744,7 @@ async def handle_get_bond(request):
             return web.json_response({"bond": bond, "summary": summary})
         return web.json_response({"error": "No bond data"}, status=404)
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"error": "internal error"}, status=500)
 
 
 async def handle_rsi_status(request):
@@ -745,7 +760,7 @@ async def handle_rsi_status(request):
             "active_goals": [g.to_dict() for g in rsi.get_active_goals()]
         })
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"error": "internal error"}, status=500)
 
 
 async def handle_rsi_improve(request):
@@ -775,7 +790,7 @@ async def handle_rsi_improve(request):
             "rationale": attempt.rationale
         })
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"error": "internal error"}, status=500)
 
 
 async def handle_rsi_full_cycle(request):
@@ -787,7 +802,7 @@ async def handle_rsi_full_cycle(request):
         result = rsi.full_improvement_cycle()
         return web.json_response(result)
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"error": "internal error"}, status=500)
 
 
 async def handle_root(request):
@@ -849,6 +864,14 @@ def main():
     elif os.environ.get("LAAP_PORT"):
         port = int(os.environ.get("LAAP_PORT"))
 
+    # 绑定地址: --host 参数 > LAAP_HOST 环境变量 > 默认 0.0.0.0 (兼容现有部署)
+    # 安全建议: 局域网内应设 LAAP_HOST=127.0.0.1, 避免无认证 API 暴露给同网段设备
+    host = "0.0.0.0"
+    if "--host" in sys.argv:
+        host = sys.argv[sys.argv.index("--host") + 1]
+    elif os.environ.get("LAAP_HOST"):
+        host = os.environ.get("LAAP_HOST")
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
     # Pre-warm LAAP engine
@@ -856,9 +879,9 @@ def main():
     get_integrator()
 
     app = create_app()
-    logger.info(f"LAAP Brain API starting on :{port}")
+    logger.info(f"LAAP Brain API starting on {host}:{port}")
     logger.info(f"OpenAI-compatible endpoint: http://localhost:{port}/v1")
-    web.run_app(app, host="0.0.0.0", port=port)
+    web.run_app(app, host=host, port=port)
 
 
 if __name__ == "__main__":

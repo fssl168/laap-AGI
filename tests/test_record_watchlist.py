@@ -79,5 +79,5 @@ def test_memory_recall_roundtrip(script_mod):
         headers={"Content-Type": "application/json"})
     d = json.load(urllib.request.urlopen(req, timeout=30))
     top = (d.get("memories") or [{}])[0]
-    assert "自选股记忆" in (top.get("text") or "")
+    assert "自选股" in (top.get("text") or "") and "K线记忆" in (top.get("text") or "")
     assert top.get("score", 0) >= 0.2
