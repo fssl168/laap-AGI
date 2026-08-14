@@ -105,3 +105,30 @@
 ## 6. 结论
 
 两条闭环（记忆 + 自进化）**已接上真实交易决策反馈的最小闭环**，P0-P3 全部落地，63 项新测试零回归。对照清单逐项核验通过。遗留项均为克制的分期边界，已明确记录，可在下一步接入真实历史数据后强化。
+
+---
+
+## 7. 第二轮审计（业务漂移排查 + 修复）
+
+对照清单做业务语义一致性核查，发现并修复 4 处业务漂移：
+
+| # | 漂移 | 严重度 | 修复 |
+|---|---|---|---|
+| 1 | **追溯链断裂**：`DecisionRecord.trade_id`（决策键 dec_xxx）≠ `OutcomeRecord.trade_id`（PaperTrade.id trd_xxx），P1"可追溯"验收未真正达成 | 🔴 严重 | `DecisionRecord` 改用 `decision_id`（决策关联键贯穿全程）；`OutcomeRecord` 加 `decision_id` 关联；`close_position/close_and_learn` 贯穿决策键；补追溯链测试 |
+| 2 | **evolutions 死表**：db.py 建了 evolutions 表但无写入，进化审计只走 jsonl | 🟡 中等 | `QuantEvolutionEngine` 加 db 参数，`evolve/approve_and_deploy` 双写 SQLite evolutions 表 + jsonl |
+| 3 | **Live 运行时降级缺失**：resolve_source 只探测 import，运行时取价失败不降级 | 🟡 中等 | `LiveMarketSource` 内置 Stub fallback，`get_price` 失败回落 + `used_fallback=True` + `fallback_reason` |
+| 4 | **记忆注入重复 + rationale 不一致**：decide_and_trade 和 submit_signal 双重注入，decisions.rationale（原始）≠ signals.rationale（含 [memory]） | 🟡 中等 | 注入收敛到 `decide_and_trade` 一处，rationale 统一含 [memory]，submit_signal 传 memory=None |
+| 5 | LiveMarketSource 注释"最新成交价"实为 bid/ask 中间价 | 🟢 轻微 | 注释改为"中间价（简化估值，非严格最新成交价）" |
+
+---
+
+## 8. 功能增强（4 项，453 passed / 0 failed）
+
+| # | 增强 | 交付 | 测试 |
+|---|---|---|---|
+| 1 | 真实历史 K 线接 OOS 门禁 | `kline_source.py` `load_price_series`（watchlist_kline_store.get_kline 优先，失败降级合成序列）；`api.py _get_quant_engine` 改用真实 K 线 | test_paper_enhancements 2 项 |
+| 2 | Live 源真实验证 | `scripts/verify_live_source.py`（用户环境运行，沙箱无法真实验证） | — |
+| 3 | 策略参数提取器（mutation 前后对比） | `strategy.py`（STRATEGY_PARAMS 锚点）+ `param_extractor.py`（AST 提取）+ `QuantEvolutionGate` 升级：strategy.py 变更走 mutation 前后 OOS 对比 | 4 项 |
+| 4 | T+1 锁仓 | `ledger.close_trade` 加 T+1 检查（`enforce_t1` 默认 True + `bypass_t1`）；`t1_locked_positions` + `settle.locked_summary` | 4 项 |
+
+**增强后遗留边界**（收敛至）：真实 K 线已接但沙箱无本地 kline.db 数据、降级合成序列；Live 源真实取价仍需用户环境跑 `verify_live_source.py`。
