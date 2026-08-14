@@ -188,7 +188,10 @@ case "$mode" in
 
         info "安装核心依赖 (唯一事实源 pyproject.toml)..."
         pip install -q --upgrade pip
-        pip install -q -e . 2>/dev/null || true
+        if ! pip install -q -e .; then
+            warn "pip install -e . 失败 — 请检查网络与 Python 版本 (需 3.11-3.13), 修复后重新运行本脚本"
+            exit 1
+        fi
 
         info "启动 LAAP Brain API (端口 11546)..."
         nohup python -m laap_brain.api --port 11546 > /tmp/laap.log 2>&1 &

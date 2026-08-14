@@ -90,5 +90,5 @@ integration_points:
     status: "active"
 
 checksums:
-  policy: "Run `python -m laap_brain check-versions` to verify compatibility"
+  policy: "Run `python -m laap_brain.version_check` to verify compatibility"
   last_verified: null
