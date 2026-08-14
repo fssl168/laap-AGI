@@ -81,3 +81,4 @@ data/
 voice_cache/
 .sync_backup/
 aris_brain/laap_semantic_memory.json
+aris_brain/memory_hierarchy.json
