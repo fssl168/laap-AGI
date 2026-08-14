@@ -13,8 +13,10 @@ license = { text = "Proprietary — see LICENSE.md" }
 dependencies = [
     # 注意: 本仓库根包名为 laap (非 laap-core), 且企业模块目前仅依赖标准库。
     # 安装企业包前请先安装主包: pip install -e . (见仓库根 README)
-    "pydantic>=2.0",
-    "cryptography>=42.0",
+    # GAP-G 决策 (2026-08): 移除 pydantic/cryptography —— 审计证明企业模块
+    # (rbac/federation/telemetry/audit_logger/license_manager) 零使用第三方库,
+    # 全部基于标准库 (hashlib/hmac/json/secrets)。移除零使用依赖保持诚实声明;
+    # 若未来模块引入 Pydantic 模型或加密功能, 再按需加回。
 ]
 
 [project.optional-dependencies]
