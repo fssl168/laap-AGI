@@ -24,7 +24,7 @@ VOICE_MAP = {
     "zm_yunyang": "zh-CN-XiaoxiaoNeural",
     "zm_xiaoxiao": "zh-CN-XiaoxiaoNeural",
     "zm_xiaoyi": "zh-CN-XiaoxiaoNeural",
-    "zh-CN-XiaoxiaoNeural": "zh-CN-XiaoxiaoNeural",
+    "zf_xiaoxiao": "zh-CN-XiaoxiaoNeural",   # ARIS 返回的 zf 前缀音色 → 晓晓
     "zh-CN-XiaoxiaoNeural": "zh-CN-XiaoxiaoNeural",
     "zh-CN-YunxiNeural": "zh-CN-XiaoxiaoNeural",
     "zh-CN-YunyangNeural": "zh-CN-XiaoxiaoNeural",
