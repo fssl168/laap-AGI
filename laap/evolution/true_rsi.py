@@ -72,7 +72,7 @@ class TrueRSIEngine:
     })
 
     # 业务作用域目录 (递归深度 0 的目标必须位于此处)
-    ALLOWED_DIRS = ("laap/agi/",)
+    ALLOWED_DIRS = ("laap/agi/", "laap/paper_trading/")
 
     def __init__(self, engine: Any, auto_deploy: bool = False):
         self.engine = engine

@@ -267,5 +267,5 @@ def test_stats_structure(engine):
     assert st["mode"] == "M4-restricted-recursion"
     assert st["max_recursion_depth"] == 1
     assert "recursion_depth" in st
-    assert st["scope"]["allowed_dirs"] == ["laap/agi/"]
+    assert st["scope"]["allowed_dirs"] == ["laap/agi/", "laap/paper_trading/"]
     assert "laap/evolution/true_rsi.py" in st["scope"]["self_file"]
