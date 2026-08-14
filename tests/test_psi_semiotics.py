@@ -11,8 +11,9 @@
 """
 
 import sys, os
-sys.path.insert(0, "D:/laap-AGI/aris_brain")
-sys.path.insert(0, "D:/laap-AGI/aris_brain/psi_semiotics")
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_root, "aris_brain"))
+sys.path.insert(0, os.path.join(_root, "aris_brain", "psi_semiotics"))
 
 import numpy as np
 import time

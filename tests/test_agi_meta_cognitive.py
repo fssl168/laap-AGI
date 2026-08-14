@@ -66,7 +66,8 @@ def test_meta_cognitive_monitor_basic():
 
     episode = monitor.end_episode()
     assert episode is not None
-    assert episode.duration_ms > 0
+    # 亚毫秒级执行时 duration_ms 可能为 0.0 (time.time() 精度), 仅验证字段存在且为数值
+    assert episode.duration_ms >= 0
     assert monitor.current_episode is None
 
     print("✓ 基本功能测试通过")
