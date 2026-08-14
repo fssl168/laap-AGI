@@ -55,6 +55,9 @@ _true_rsi_engine: Optional[Any] = None
 # mutations 历史在 /v1/evo/* 各端点间可见 (否则每次新建引擎,
 # rollback/deploy 永远找不到历史 mutation)。
 _code_evolution_engine: Optional[Any] = None
+# 量化闭环: paper_trading 单例 (QuantEvolutionEngine + PaperDB), 懒创建。
+_quant_engine: Optional[Any] = None
+_quant_db: Optional[Any] = None
 
 
 def _get_code_evolution_engine() -> Optional[Any]:
@@ -1009,6 +1012,157 @@ async def handle_evo_deploy(request):
         return web.json_response({"error": "internal error"}, status=500)
 
 
+# ── 量化闭环 (paper_trading): /v1/quant/* ──────────────────────
+
+def _get_quant_db() -> Optional[Any]:
+    """量化 PaperDB 单例（懒创建）。"""
+    global _quant_db
+    if _quant_db is None:
+        try:
+            from laap.paper_trading.db import PaperDB
+            _quant_db = PaperDB()
+        except Exception as e:
+            logger.warning(f"PaperDB lazy init failed: {e}")
+            _quant_db = None
+    return _quant_db
+
+
+def _get_quant_engine() -> Optional[Any]:
+    """量化代码级进化引擎单例（懒创建 + attach 双守卫）。"""
+    global _quant_engine
+    if _quant_engine is not None:
+        return _quant_engine
+    try:
+        from laap.paper_trading.quant_evolution import QuantEvolutionEngine
+        from laap.paper_trading.backtest_runner import BacktestRunner
+        engine = _get_code_evolution_engine()
+        if engine is None:
+            return None
+        # OOS 门禁基线价格序列（合成趋势+噪声；真实历史 K 线接入是后续增强）
+        n = 120
+        price_series = [100.0 + i * 0.5 + ((i * 7) % 11 - 5) * 0.3 for i in range(n)]
+        runner = BacktestRunner()
+        _quant_engine = QuantEvolutionEngine(engine, runner, price_series).attach()
+    except Exception as e:
+        logger.warning(f"QuantEvolutionEngine lazy init failed: {e}")
+        _quant_engine = None
+    return _quant_engine
+
+
+async def handle_quant_decision_record(request):
+    """POST /v1/quant/decisions — 决策留痕。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    symbol = (body or {}).get("symbol", "")
+    if not symbol:
+        return web.json_response({"error": "symbol required"}, status=400)
+    try:
+        from laap.paper_trading.decision_record import record_decision
+        from laap.paper_trading.models import DecisionAction
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        action = DecisionAction((body or {}).get("action", "buy"))
+        rec = record_decision(
+            db, symbol, action,
+            rationale=(body or {}).get("rationale", ""),
+            basis_memories=(body or {}).get("basis_memories"),
+            risk_note=(body or {}).get("risk_note", ""),
+            expected=(body or {}).get("expected", ""),
+            trade_id=(body or {}).get("trade_id"),
+        )
+        return web.json_response(rec.to_dict())
+    except Exception as e:
+        logger.warning(f"quant_decision_record failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_lessons(request):
+    """GET /v1/quant/lessons?lesson_type= — 查询教训。"""
+    try:
+        from laap.paper_trading.memory_bridge import verify_lessons
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        lesson_type = request.query.get("lesson_type", "")
+        if lesson_type:
+            return web.json_response(verify_lessons(db, lesson_type))
+        conn = db.conn()
+        try:
+            rows = conn.execute("SELECT * FROM outcomes ORDER BY trade_id").fetchall()
+        finally:
+            conn.close()
+        return web.json_response({"lessons": [dict(r) for r in rows]})
+    except Exception as e:
+        logger.warning(f"quant_lessons failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_evolve(request):
+    """POST /v1/quant/evolve — 触发一轮代码级受限进化（产提案，不自动部署）。"""
+    try:
+        qe = _get_quant_engine()
+        if qe is None:
+            return web.json_response({"error": "quant engine unavailable"}, status=500)
+        results = qe.evolve(max_mutations=1)
+        return web.json_response({"results": results})
+    except Exception as e:
+        logger.warning(f"quant_evolve failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_evolve_approve(request):
+    """POST /v1/quant/evolve/approve — 人工批准并部署。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    mutation_id = (body or {}).get("mutation_id", "")
+    if not mutation_id:
+        return web.json_response({"error": "mutation_id required"}, status=400)
+    try:
+        qe = _get_quant_engine()
+        if qe is None:
+            return web.json_response({"error": "quant engine unavailable"}, status=500)
+        result = qe.approve_and_deploy(
+            mutation_id, approver=(body or {}).get("approver", "api"))
+        status_code = 200 if result.get("status") == "deployed" else 409
+        return web.json_response(result, status=status_code)
+    except Exception as e:
+        logger.warning(f"quant_evolve_approve failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_evolve_reject(request):
+    """POST /v1/quant/evolve/reject — 拒绝并回滚最近一次部署。"""
+    try:
+        qe = _get_quant_engine()
+        if qe is None:
+            return web.json_response({"error": "quant engine unavailable"}, status=500)
+        result = qe.rollback_last()
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"quant_evolve_reject failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_evolve_audit(request):
+    """GET /v1/quant/evolve/audit — 查询进化审计。"""
+    try:
+        engine = _get_code_evolution_engine()
+        if engine is None or getattr(engine, "audit", None) is None:
+            return web.json_response({"error": "audit unavailable"}, status=500)
+        return web.json_response({
+            "stats": engine.audit.stats(),
+            "recent": engine.audit.query(limit=20),
+        })
+    except Exception as e:
+        logger.warning(f"quant_evolve_audit failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
 async def handle_root(request):
     return web.json_response({
         "name": "LAAP Brain API",
@@ -1081,6 +1235,13 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/evo/status", handle_evo_status)
     app.router.add_post("/v1/evo/rollback", handle_evo_rollback)
     app.router.add_post("/v1/evo/deploy", handle_evo_deploy)
+    # 量化闭环端点 (paper_trading)
+    app.router.add_post("/v1/quant/decisions", handle_quant_decision_record)
+    app.router.add_get("/v1/quant/lessons", handle_quant_lessons)
+    app.router.add_post("/v1/quant/evolve", handle_quant_evolve)
+    app.router.add_post("/v1/quant/evolve/approve", handle_quant_evolve_approve)
+    app.router.add_post("/v1/quant/evolve/reject", handle_quant_evolve_reject)
+    app.router.add_get("/v1/quant/evolve/audit", handle_quant_evolve_audit)
     return app
 
 
