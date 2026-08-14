@@ -926,6 +926,13 @@ class CodeEvolutionEngine:
         self.rollback_count = 0
         self.created_at = time.time()
 
+        # M3 治理: 进化审计日志 (懒加载, 失败不阻断)
+        try:
+            from laap.agi.evolution_audit import EvolutionAuditLog
+            self.audit = EvolutionAuditLog(repo_root=self.repo_root)
+        except Exception:
+            self.audit = None
+
         self._lock = threading.Lock()
 
     def scan_targets(self, directory: str = "") -> List[CodeTarget]:
@@ -986,15 +993,36 @@ class CodeEvolutionEngine:
             "complexity": target.complexity,
         }
 
+        # M3 治理: 冷却期检查 (同一目标在冷却期内拒绝新提案, 防抖动)
+        if self.audit is not None:
+            try:
+                in_cooldown, remaining = self.audit.cooldown_check(target.file_path)
+                if in_cooldown:
+                    result["status"] = "cooldown"
+                    result["reason"] = f"Target in cooldown ({remaining:.1f}h remaining)"
+                    return result
+            except Exception:
+                pass
+
         # Step 2: Generate patch
         mutation = self.patcher.generate_patch(target)
         if not mutation or mutation.status == MutationStatus.REJECTED:
             result["status"] = "rejected"
             result["reason"] = mutation.description if mutation else "No patch generated"
+            if self.audit is not None:
+                try:
+                    self.audit.record(mutation, "rejected", result["reason"])
+                except Exception:
+                    pass
             return result
 
         self.mutations.append(mutation)
         result["mutation_id"] = mutation.id
+        if self.audit is not None:
+            try:
+                self.audit.record(mutation, "proposed", "patch generated")
+            except Exception:
+                pass
 
         # Step 3: Sandbox test
         test_result = self.tester.test_mutation(mutation, self.repo_root, test_commands)
@@ -1006,9 +1034,19 @@ class CodeEvolutionEngine:
             mutation.status = MutationStatus.TEST_FAILED
             result["status"] = "test_failed"
             result["errors"] = test_result.get("errors", "")[:200]
+            if self.audit is not None:
+                try:
+                    self.audit.record(mutation, "test_failed", result["errors"])
+                except Exception:
+                    pass
             return result
 
         mutation.status = MutationStatus.TEST_PASSED
+        if self.audit is not None:
+            try:
+                self.audit.record(mutation, "test_passed", "sandbox tests passed")
+            except Exception:
+                pass
 
         # Step 4: Quality Gate (MANDATORY before deploy)
         if hasattr(self, 'qa') and self.qa:
@@ -1025,6 +1063,11 @@ class CodeEvolutionEngine:
                 mutation.status = MutationStatus.REJECTED
                 result['status'] = 'qa_blocked'
                 result['qa_failures'] = qa_report.failures
+                if self.audit is not None:
+                    try:
+                        self.audit.record(mutation, "rejected", "qa_blocked")
+                    except Exception:
+                        pass
                 return result
 
         # Step 5: Deploy
@@ -1035,9 +1078,20 @@ class CodeEvolutionEngine:
             if success:
                 self.deployed_count += 1
                 result["status"] = "deployed"
+                if self.audit is not None:
+                    try:
+                        self.audit.record(mutation, "deployed",
+                                          f"commit={info[:16]}")
+                    except Exception:
+                        pass
             else:
                 result["status"] = "deploy_failed"
                 result["error"] = info
+                if self.audit is not None:
+                    try:
+                        self.audit.record(mutation, "rejected", f"deploy_failed: {info[:120]}")
+                    except Exception:
+                        pass
         else:
             result["status"] = "test_passed"
             result["deployed"] = False

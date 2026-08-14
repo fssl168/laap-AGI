@@ -820,6 +820,64 @@ async def handle_rsi_full_cycle(request):
         return web.json_response({"error": "internal error"}, status=500)
 
 
+# ── M3 治理: 代码进化审计与部署授权 ──────────────────────────
+# True RSI 的治理层 — 所有代码级变更可审计、部署需显式批准。
+
+async def handle_evo_audit(request):
+    """GET /v1/evo/audit — 查询代码进化审计日志。"""
+    try:
+        sys.path.insert(0, str(BRAIN_DIR))
+        from laap.agi.evolution_audit import EvolutionAuditLog
+        audit = EvolutionAuditLog(repo_root=str(LAAP_ROOT))
+        return web.json_response({
+            "status": "ok",
+            "stats": audit.stats(),
+            "recent": audit.query(limit=50),
+        })
+    except Exception as e:
+        logger.warning(f"evo_audit failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_evo_status(request):
+    """GET /v1/evo/status — 代码进化引擎状态 (M3 治理视图)。"""
+    try:
+        sys.path.insert(0, str(BRAIN_DIR))
+        from laap.agi.code_evolution import CodeEvolutionEngine
+        from laap.agi.code_evolution import SafetyGuard
+        engine = CodeEvolutionEngine(repo_root=str(LAAP_ROOT))
+        return web.json_response({
+            "status": "ok",
+            "stats": engine.stats(),
+            "protected_files": sorted(SafetyGuard.PROTECTED_FILES),
+            "sandbox_whitelist": list(engine.tester._ALLOWED_TEST_CMDS),
+        })
+    except Exception as e:
+        logger.warning(f"evo_status failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_evo_rollback(request):
+    """POST /v1/evo/rollback — 回滚最近一次部署的代码进化。"""
+    try:
+        sys.path.insert(0, str(BRAIN_DIR))
+        from laap.agi.code_evolution import CodeEvolutionEngine
+        engine = CodeEvolutionEngine(repo_root=str(LAAP_ROOT))
+        result = engine.rollback_last()
+        # 审计记录回滚
+        if engine.audit is not None:
+            try:
+                engine.audit.record(
+                    {"id": result.get("mutation_id", ""), "status": "rolled_back"},
+                    "rolled_back", "manual rollback via API")
+            except Exception:
+                pass
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"evo_rollback failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
 async def handle_root(request):
     return web.json_response({
         "name": "LAAP Brain API",
@@ -887,6 +945,10 @@ def create_app() -> web.Application:
     app.router.add_post("/v1/rsi_status", handle_rsi_status)
     app.router.add_post("/v1/rsi_improve", handle_rsi_improve)
     app.router.add_post("/v1/rsi_full_cycle", handle_rsi_full_cycle)
+    # M3 治理端点
+    app.router.add_get("/v1/evo/audit", handle_evo_audit)
+    app.router.add_get("/v1/evo/status", handle_evo_status)
+    app.router.add_post("/v1/evo/rollback", handle_evo_rollback)
     return app
 
 
