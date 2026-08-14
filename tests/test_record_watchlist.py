@@ -85,6 +85,6 @@ def test_memory_recall_roundtrip(script_mod, laap_api_live):
     text = top.get("text") or ""
     if not text:
         pytest.skip("语义记忆库为空 (需先运行 scripts/market/_record_watchlist.py)")
-    if "自选股" not in text or "K线记忆" not in text:
+    if "自选股" not in text and "K线记忆" not in text:
         pytest.skip("召回结果不含自选股/K线记忆样本")
     assert top.get("score", 0) >= 0.2
