@@ -23,11 +23,20 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # zm_yunxi (云希) → edge-tts 音色映射
 VOICE_MAP = {
-    "zm_yunxi": "zh-CN-YunxiNeural",
-    "zm_yunyang": "zh-CN-YunyangNeural",
+    # 固定：女声 + 中文 + 温柔（晓晓 Xiaoxiao，温柔女声）——任何音色一律映射到晓晓
+    "zm_yunxi": "zh-CN-XiaoxiaoNeural",       # 原云希(男) → 固定晓晓(温柔女声)
+    "zm_yunyang": "zh-CN-XiaoxiaoNeural",     # 原云扬(男) → 固定晓晓
     "zm_xiaoxiao": "zh-CN-XiaoxiaoNeural",
-    "zm_xiaoyi": "zh-CN-XiaoyiNeural",
+    "zm_xiaoyi": "zh-CN-XiaoxiaoNeural",      # 原晓伊(清新) → 固定晓晓(温柔)
+    "zf_xiaoxiao": "zh-CN-XiaoxiaoNeural",    # ARIS 返回的 zf 前缀音色 → 晓晓
+    "zh-CN-XiaoxiaoNeural": "zh-CN-XiaoxiaoNeural",
+    "zh-CN-YunxiNeural": "zh-CN-XiaoxiaoNeural",
+    "zh-CN-YunyangNeural": "zh-CN-XiaoxiaoNeural",
+    "zh-CN-XiaoyiNeural": "zh-CN-XiaoxiaoNeural",
 }
+
+# 默认音色（固定温柔女声）
+DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 
 
 def post(url, payload):
@@ -57,7 +66,7 @@ def get_tts_params(question: str) -> dict:
 async def synth_speech(text: str, tts_params: dict, out_path: str) -> bool:
     """edge-tts 合成语音"""
     import edge_tts
-    voice = VOICE_MAP.get(tts_params.get("voice", ""), "zh-CN-YunxiNeural")
+    voice = VOICE_MAP.get(tts_params.get("voice", ""), DEFAULT_VOICE)
     speed = float(tts_params.get("speed", 1.0))
     rate = f"+{int((speed - 1) * 100)}%" if speed >= 1 else f"{int((speed - 1) * 100)}%"
     pitch = float(tts_params.get("pitch_shift", 0.0) or 0)

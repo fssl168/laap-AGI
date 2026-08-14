@@ -103,15 +103,29 @@ def _get_llm_client():
         if _llm_client is None:
             from openai import OpenAI
 
-            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            api_key = _llm_api_key()
             base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
             _llm_client = OpenAI(api_key=api_key, base_url=base_url, timeout=60)
     return _llm_client
 
 
+def _llm_api_key() -> str:
+    """LLM 兜底用 key: 优先读 LAAP 自己的 .env (cpk- agnes key),
+    防止 Hermes env_loader 注入的旧 DeepSeek sk- key 覆盖(os.environ 被污染)。"""
+    try:
+        from dotenv import dotenv_values
+        vals = dotenv_values(LAAP_ROOT / ".env")
+        laap_key = vals.get("DEEPSEEK_API_KEY", "").strip()
+        if laap_key:
+            return laap_key
+    except Exception:
+        pass
+    return os.environ.get("DEEPSEEK_API_KEY", "")
+
+
 def _llm_tail_fallback(user_msg: str, psi_context: str = "") -> Optional[Dict[str, Any]]:
     """链尾 LLM 兜底: 返回 OpenAI 兼容格式, 失败/无 key 返回 None。"""
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    api_key = _llm_api_key()
     if not api_key:
         return None
     try:
@@ -292,8 +306,9 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
 
     # ── Step 2: RulesEngine ──
     try:
-        sys.path.insert(0, str(BRAIN_DIR))
-        from aris_rules_engine import process as rules_process, get_engine as get_rules_engine
+        # aris_rules_engine 已是包内模块(相对导入), 需把 LAAP_ROOT 入 path 按包导入
+        sys.path.insert(0, str(LAAP_ROOT))
+        from aris_brain.aris_rules_engine import process as rules_process, get_engine as get_rules_engine
 
         re_engine = get_rules_engine()
         rule_result = rules_process(user_msg)
