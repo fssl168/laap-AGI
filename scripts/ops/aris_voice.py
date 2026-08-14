@@ -19,19 +19,19 @@ CACHE_DIR = str(Path(__file__).resolve().parent.parent.parent / "voice_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 VOICE_MAP = {
-    # 固定：女声 + 中文 + 温柔（晓晓 Xiaoxiao，温柔女声）
-    "zm_yunxi": "zh-CN-XiaoxiaoNeural",      # 原云希(男) → 固定晓晓(温柔女声)
-    "zm_yunyang": "zh-CN-XiaoxiaoNeural",
-    "zm_xiaoxiao": "zh-CN-XiaoxiaoNeural",
-    "zm_xiaoyi": "zh-CN-XiaoxiaoNeural",
-    "zf_xiaoxiao": "zh-CN-XiaoxiaoNeural",   # ARIS 返回的 zf 前缀音色 → 晓晓
-    "zh-CN-XiaoxiaoNeural": "zh-CN-XiaoxiaoNeural",
-    "zh-CN-YunxiNeural": "zh-CN-XiaoxiaoNeural",
-    "zh-CN-YunyangNeural": "zh-CN-XiaoxiaoNeural",
+    # 固定：女声 + 中文 + 成熟知性（晓萱 Xiaoxuan，成熟知性）
+    "zm_yunxi": "zh-CN-XiaoxuanNeural",      # 原云希(男) → 固定晓萱(成熟知性)
+    "zm_yunyang": "zh-CN-XiaoxuanNeural",
+    "zm_xiaoxiao": "zh-CN-XiaoxuanNeural",
+    "zm_xiaoyi": "zh-CN-XiaoxuanNeural",
+    "zf_xiaoxiao": "zh-CN-XiaoxuanNeural",   # ARIS 返回的 zf 前缀音色 → 晓萱
+    "zh-CN-XiaoxuanNeural": "zh-CN-XiaoxuanNeural",
+    "zh-CN-YunxiNeural": "zh-CN-XiaoxuanNeural",
+    "zh-CN-YunyangNeural": "zh-CN-XiaoxuanNeural",
 }
 
-# 默认音色（固定温柔女声）
-DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+# 默认音色（固定成熟知性）
+DEFAULT_VOICE = "zh-CN-XiaoxuanNeural"
 
 # 多轮历史
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aris_chat_history.json")
@@ -81,7 +81,7 @@ def get_tts_params(question: str) -> dict:
 
 async def synth_speech(text: str, tts_params: dict, out_path: str) -> bool:
     import edge_tts
-    # 固定温柔女声：任何来源的音色参数都映射到 DEFAULT_VOICE
+    # 固定成熟知性：任何来源的音色参数都映射到 DEFAULT_VOICE
     voices = [DEFAULT_VOICE]
     speed = float(tts_params.get("speed", 1.0) or 1.0)
     rate = f"+{int((speed - 1) * 100)}%" if speed >= 1 else f"{int((speed - 1) * 100)}%"

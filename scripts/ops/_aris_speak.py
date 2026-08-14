@@ -23,20 +23,20 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # zm_yunxi (云希) → edge-tts 音色映射
 VOICE_MAP = {
-    # 固定：女声 + 中文 + 温柔（晓晓 Xiaoxiao，温柔女声）——任何音色一律映射到晓晓
-    "zm_yunxi": "zh-CN-XiaoxiaoNeural",       # 原云希(男) → 固定晓晓(温柔女声)
-    "zm_yunyang": "zh-CN-XiaoxiaoNeural",     # 原云扬(男) → 固定晓晓
-    "zm_xiaoxiao": "zh-CN-XiaoxiaoNeural",
-    "zm_xiaoyi": "zh-CN-XiaoxiaoNeural",      # 原晓伊(清新) → 固定晓晓(温柔)
-    "zf_xiaoxiao": "zh-CN-XiaoxiaoNeural",    # ARIS 返回的 zf 前缀音色 → 晓晓
-    "zh-CN-XiaoxiaoNeural": "zh-CN-XiaoxiaoNeural",
-    "zh-CN-YunxiNeural": "zh-CN-XiaoxiaoNeural",
-    "zh-CN-YunyangNeural": "zh-CN-XiaoxiaoNeural",
-    "zh-CN-XiaoyiNeural": "zh-CN-XiaoxiaoNeural",
+    # 固定：女声 + 中文 + 成熟知性（晓萱 Xiaoxuan，成熟知性）——任何音色一律映射到晓萱
+    "zm_yunxi": "zh-CN-XiaoxuanNeural",       # 原云希(男) → 固定晓萱(成熟知性)
+    "zm_yunyang": "zh-CN-XiaoxuanNeural",     # 原云扬(男) → 固定晓萱
+    "zm_xiaoxiao": "zh-CN-XiaoxuanNeural",
+    "zm_xiaoyi": "zh-CN-XiaoxuanNeural",      # 原晓伊(清新) → 固定晓萱(成熟知性)
+    "zf_xiaoxiao": "zh-CN-XiaoxuanNeural",    # ARIS 返回的 zf 前缀音色 → 晓萱
+    "zh-CN-XiaoxuanNeural": "zh-CN-XiaoxuanNeural",
+    "zh-CN-YunxiNeural": "zh-CN-XiaoxuanNeural",
+    "zh-CN-YunyangNeural": "zh-CN-XiaoxuanNeural",
+    "zh-CN-XiaoyiNeural": "zh-CN-XiaoxuanNeural",
 }
 
-# 默认音色（固定温柔女声）
-DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+# 默认音色（固定成熟知性）
+DEFAULT_VOICE = "zh-CN-XiaoxuanNeural"
 
 
 def post(url, payload):
