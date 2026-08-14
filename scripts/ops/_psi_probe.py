@@ -7,7 +7,7 @@ import os
 
 # 1. 用 LAAP 自己的 venv python 运行本脚本
 # 2. 导入 PSI 桥接器
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "aris_brain"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "aris_brain"))
 
 from psi_jspace_bridge.psi_hermes_adapter import (
     on_conversation_start,
