@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """每日 A 股大盘行情记忆（收盘后运行，动态日期版）。
 
 拉取三大指数收盘数据 → 写入 LAAP 语义记忆 → 输出摘要（供 cron 交付）。
@@ -11,7 +12,7 @@ import sys
 import urllib.request
 
 sys.path.insert(0, r"D:\leanpython\daily_stock_analysis")
-sys.path.insert(0, r"D:\laap-AGI")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 REFLECT = "http://localhost:11546/v1/reflect"
 RECALL = "http://localhost:11546/v1/recall_memory"

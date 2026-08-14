@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """每日自选股 K 线记忆与持久化（收盘后运行）。
 
 1) 拉取 42 只自选股最近 60 根日 K（腾讯行情，免费无需 key）
@@ -20,7 +21,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, r"D:\leanpython\daily_stock_analysis")
-sys.path.insert(0, r"D:\laap-AGI")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 REFLECT = "http://localhost:11546/v1/reflect"
 RECALL = "http://localhost:11546/v1/recall_memory"

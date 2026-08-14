@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """把今日 A 股大盘行情写入 LAAP 记忆并验证召回。"""
 import json
 import re
 import sys
 import urllib.request
 
-sys.path.insert(0, r"D:\laap-AGI")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 sys.path.insert(0, r"D:\leanpython\daily_stock_analysis")
 
 REFLECT = "http://localhost:11546/v1/reflect"

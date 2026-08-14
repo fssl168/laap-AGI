@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """用 LAAP 读取《Mapping the Mind of a Large Language Model》全文并记忆总结。"""
 import json
 import urllib.request
@@ -6,7 +7,7 @@ import urllib.request
 API = "http://localhost:11546/v1/chat/completions"
 REFLECT = "http://localhost:11546/v1/reflect"
 RECALL = "http://localhost:11546/v1/recall_memory"
-MD_PATH = r"D:\laap-AGI\Mapping_the_Mind_of_a_LLM_Anthropic_fulltext.md"
+MD_PATH = str(Path(__file__).resolve().parent.parent.parent / "Mapping_the_Mind_of_a_LLM_Anthropic_fulltext.md")
 
 READ_TOOLS = [{"type": "function", "function": {
     "name": "read_paper",

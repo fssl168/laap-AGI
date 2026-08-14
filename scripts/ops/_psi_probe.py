@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """用 LAAP 项目自己的 venv 直接调用 PSI 桥接器，查看完整意识空间。"""
 import json
 import sys
@@ -6,7 +7,7 @@ import os
 
 # 1. 用 LAAP 自己的 venv python 运行本脚本
 # 2. 导入 PSI 桥接器
-sys.path.insert(0, r"D:\laap-AGI\aris_brain")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "aris_brain"))
 
 from psi_jspace_bridge.psi_hermes_adapter import (
     on_conversation_start,

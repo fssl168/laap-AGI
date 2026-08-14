@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "_candidate_chart.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "market" / "_candidate_chart.py"
 
 PICKS = [
     {"code": "600162", "name": "香江控股", "close": 4.29, "ret5": 32.41, "date": "2026-08-11"},

@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "_kline_chart.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "market" / "_kline_chart.py"
 
 INDEX_JSON = {
     "code": 0,

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "_market_summary_demo.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "market" / "_market_summary_demo.py"
 
 # 腾讯行情样例（真实抓取字段，70+ 段）：上证指数 跌 0.82%
 SAMPLE_SH = (

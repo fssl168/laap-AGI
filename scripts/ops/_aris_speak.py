@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """ARIS 语音对话：问ARIS → 拿文本+表情 → edge-tts 生成语音 → 本地播放 + 输出音频文件。
 
 用法（用 LAAP venv）:
   ./.venv/Scripts/python.exe _aris_speak.py "你的问题"
 输出:
-  - 音频文件 D:\laap-AGI\voice_cache\aris_<时间戳>.mp3
+  - 音频文件 <项目根>/voice_cache/aris_<时间戳>.mp3
   - 本地 ffplay 播放
   - 打印 MEDIA:<路径> 供聊天界面发送
 """
@@ -17,7 +18,7 @@ import urllib.request
 from datetime import datetime
 
 API = "http://localhost:11546"
-CACHE_DIR = r"D:\laap-AGI\voice_cache"
+CACHE_DIR = str(Path(__file__).resolve().parent.parent.parent / "voice_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 # zm_yunxi (云希) → edge-tts 音色映射

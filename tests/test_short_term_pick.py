@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "_short_term_pick.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "market" / "_short_term_pick.py"
 
 
 @pytest.fixture(scope="module")

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """ARIS 微信语音对讲 — 问 ARIS → 文本回复 → mp3 → silk(微信原生语音气泡).
 
 用法（用 LAAP venv）:
@@ -14,7 +15,7 @@ import urllib.request
 from datetime import datetime
 
 API = "http://localhost:11546"
-CACHE_DIR = r"D:\laap-AGI\voice_cache"
+CACHE_DIR = str(Path(__file__).resolve().parent.parent.parent / "voice_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 VOICE_MAP = {

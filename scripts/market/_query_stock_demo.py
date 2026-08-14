@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """调用LAAP查询600114实时股价"""
 import json
 import sys
 import urllib.request
 
-sys.path.insert(0, r"D:\laap-AGI")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 API = "http://localhost:11546/v1/chat/completions"
 

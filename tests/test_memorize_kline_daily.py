@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "_memorize_kline_daily.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "market" / "_memorize_kline_daily.py"
 
 # 腾讯 K 线接口样例（2 根日 K）
 KLINE_JSON = {

@@ -16,7 +16,7 @@
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(r"D:\laap-AGI\data\watchlist_kline\kline.db")
+DB_PATH = Path(__file__).resolve().parent / "data" / "watchlist_kline" / "kline.db"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_kline (

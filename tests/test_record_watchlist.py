@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "_record_watchlist.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "market" / "_record_watchlist.py"
 
 WATCHLIST_TOOL = [{
     "type": "function",

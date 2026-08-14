@@ -74,31 +74,19 @@ integration_points:
     description: "OpenAI-compatible HTTP endpoint exposing LAAP cognitive stack"
     type: "http"
     module: "laap_brain.api"
-    port: 11530
+    port: 11546
     status: "active"
 
-  - name: "HermesChannel"
-    description: "Aris Voice Cortex — uses Hermes AIAgent as LLM backend"
+  - name: "HermesIntegration"
+    description: "AGI 侧 Hermes 集成 (agent 生命周期桥接与工具注册)"
     type: "class"
-    module: "aris_brain.hermes_channel"
+    module: "laap.agi.hermes_integration"
     status: "active"
 
-  - name: "HermesToolBridge"
-    description: "Registers LAAP tools in Hermes tool registry"
+  - name: "PsiCoreBridge"
+    description: "PSI 核心桥 (Python fallback)"
     type: "class"
-    module: "laap.agent_core.hermes_tool_bridge"
-    status: "active"
-
-  - name: "AGCognitiveBridge"
-    description: "AGI bridge hooking into Hermes AIAgent lifecycle"
-    type: "class"
-    module: "laap_brain.agi_bridge"
-    status: "active"
-
-  - name: "HandshakeProtocol"
-    description: "Cross-process IPC between Ao and Aris"
-    type: "protocol"
-    module: "laap.handshake"
+    module: "aris_brain.psi_core_bridge"
     status: "active"
 
 checksums:

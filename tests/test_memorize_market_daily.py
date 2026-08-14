@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "_memorize_market_daily.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "market" / "_memorize_market_daily.py"
 
 SAMPLE_RAW = (
     'v_sh000001="1~上证指数~000001~3934.09~3966.59~3950.71~529490944~0~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~0~0.00~'

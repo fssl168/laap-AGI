@@ -8,13 +8,14 @@ import datetime
 import json
 import sys
 import urllib.request
+from pathlib import Path
 
-sys.path.insert(0, r"D:\laap-AGI")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 KLINE_API = "http://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 UA = {"User-Agent": "Mozilla/5.0"}
 CODE = "sh000001"  # 上证指数
-OUT_DIR = r"D:\laap-AGI\data\watchlist_kline"
+OUT_DIR = str(Path(__file__).resolve().parent.parent.parent / "data" / "watchlist_kline")
 
 
 def fetch_index_kline(code: str = CODE, count: int = 800) -> list:

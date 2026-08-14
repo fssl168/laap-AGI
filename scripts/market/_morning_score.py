@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """开盘前（9:15 集合竞价后）实时短线评分 —— 输出候选股列表（供 cron 投递 QQ）。
 
 - 实时行情：腾讯 qt.gtimg.cn 批量单请求拉 42 只（最新价/涨跌幅/量）
@@ -11,7 +12,7 @@ import re
 import sys
 import urllib.request
 
-sys.path.insert(0, r"D:\laap-AGI")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 sys.path.insert(0, r"D:\leanpython\daily_stock_analysis")
 
 CODES = (

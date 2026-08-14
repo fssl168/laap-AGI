@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "_morning_score.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "market" / "_morning_score.py"
 
 KLINE = [
     ["2026-07-01", 10.0, 10.0, 10.2, 9.8, 1000000.0],

@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """调用 LAAP 工具回答「昨天的自选股怎么样」（LAAP 路由 → kline.db 查询 → 回填）。"""
 import json
 import sys
 import urllib.request
 
-sys.path.insert(0, r"D:\laap-AGI")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 API = "http://localhost:11546/v1/chat/completions"
 

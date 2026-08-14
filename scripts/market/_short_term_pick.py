@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
 """短线激进型选股：动量 + 量能 + 均线排列 综合评分（基于 kline.db 历史数据）。"""
 import sys
 
-sys.path.insert(0, r"D:\laap-AGI")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from watchlist_kline_store import get_kline, get_stock_names  # noqa: E402
 

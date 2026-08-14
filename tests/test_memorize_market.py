@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "_memorize_market.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "market" / "_memorize_market.py"
 
 # 真实腾讯响应样例（上证指数，前 38 字段）
 SAMPLE_RAW = (

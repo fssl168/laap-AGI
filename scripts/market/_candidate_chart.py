@@ -3,12 +3,14 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, r"D:\laap-AGI")
+# 本目录 (scripts/market) → 兄弟脚本; 仓库根 → laap / aris_brain / watchlist_kline_store
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from _short_term_pick import analyze as pick_analyze  # noqa: E402
 from watchlist_kline_store import get_kline  # noqa: E402
 
-OUT = Path(r"D:\laap-AGI\data\watchlist_kline\candidates_10d.png")
+OUT = Path(__file__).resolve().parent.parent.parent / "data" / "watchlist_kline" / "candidates_10d.png"
 TOPN = 4
 
 

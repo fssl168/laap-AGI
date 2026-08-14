@@ -201,6 +201,14 @@ LAAP 采用 **Open Core** 商业模式：
 
 **商标声明**：LAAP、Aris、Compiled AI 及其相关标识为 Lorry / LAAP 项目的商标。未经书面许可，不得在衍生产品或服务中使用这些名称作为品牌名称或域名。
 
+**企业版安装**（需商业授权，见 `COMMERCIAL_LICENSE.md`）：
+
+```bash
+pip install ./laap-enterprise
+```
+
+企业包包含 `federation`（联邦学习）、`rbac`（权限）、`telemetry`（遥测）、`audit_logger`（审计）、`license_manager`（许可校验）等模块，仅在获得商业授权后使用。
+
 如需商业授权、OEM 合作或投资洽谈，请联系项目维护者。
 
 ---
