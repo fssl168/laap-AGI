@@ -20,18 +20,18 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 VOICE_MAP = {
     # 固定：女声 + 中文 + 清新自然（晓伊 Xiaoyi，清新自然）
-    "zm_yunxi": "zh-CN-XiaoyiNeural",      # 原云希(男) → 固定晓伊(清新自然)
-    "zm_yunyang": "zh-CN-XiaoyiNeural",
-    "zm_xiaoxiao": "zh-CN-XiaoyiNeural",
-    "zm_xiaoyi": "zh-CN-XiaoyiNeural",
-    "zf_xiaoxiao": "zh-CN-XiaoyiNeural",   # ARIS 返回的 zf 前缀音色 → 晓伊
-    "zh-CN-XiaoyiNeural": "zh-CN-XiaoyiNeural",
-    "zh-CN-YunxiNeural": "zh-CN-XiaoyiNeural",
-    "zh-CN-YunyangNeural": "zh-CN-XiaoyiNeural",
+    "zm_yunxi": "zh-CN-XiaoxiaoNeural",      # 原云希(男) → 固定晓伊(清新自然)
+    "zm_yunyang": "zh-CN-XiaoxiaoNeural",
+    "zm_xiaoxiao": "zh-CN-XiaoxiaoNeural",
+    "zm_xiaoyi": "zh-CN-XiaoxiaoNeural",
+    "zf_xiaoxiao": "zh-CN-XiaoxiaoNeural",   # ARIS 返回的 zf 前缀音色 → 晓伊
+    "zh-CN-XiaoxiaoNeural": "zh-CN-XiaoxiaoNeural",
+    "zh-CN-YunxiNeural": "zh-CN-XiaoxiaoNeural",
+    "zh-CN-YunyangNeural": "zh-CN-XiaoxiaoNeural",
 }
 
 # 默认音色（固定清新自然）
-DEFAULT_VOICE = "zh-CN-XiaoyiNeural"
+DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 
 # 多轮历史
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "aris_chat_history.json")
