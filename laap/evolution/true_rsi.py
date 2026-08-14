@@ -152,6 +152,25 @@ class TrueRSIEngine:
 
         return results
 
+    def auto_improve(self,
+                     directory: str = "laap/agi/",
+                     max_mutations: int = 1,
+                     auto_deploy: bool = False,
+                     test_commands: Optional[List[str]] = None,
+                     **kwargs: Any) -> List[Dict[str, Any]]:
+        """与 `CodeEvolutionEngine.auto_improve` 签名兼容 (供 EvolutionScheduler 驱动)。
+
+        M4 约束 4: 无论调用方传 `auto_deploy` 为何, 恒强制 False (永不自动部署,
+        提案走 `/v1/evo/deploy` 人工批准)。递归深度由引擎内部记账管理。
+
+        服务链路 (laap_brain/api.py) 在 `LAAP_TRSI_ENABLED=1` 时以本方法作为
+        调度器 `engine.auto_improve(...)` 的调用入口。
+        """
+        del kwargs  # 兼容未来调度器扩展参数 (静默忽略)
+        if test_commands is not None:
+            logger.warning("M4: test_commands 被忽略 (受限递归不注入任意测试命令)")
+        return self.improve(max_mutations=max_mutations, directory=directory)
+
     # ════════════════════════════════════════════════════════
     # 治理 (包装 M3 API, 追加递归配额语义)
     # ════════════════════════════════════════════════════════

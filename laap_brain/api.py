@@ -48,6 +48,9 @@ _engines_loaded = False
 
 # M2 True RSI: 进化调度器单例 (服务链路持有, 与 AGIAgent 场景共用)
 _evolution_scheduler: Optional[Any] = None
+# M4 True RSI: 受限递归引擎单例 (LAAP_TRSI_ENABLED=1 时挂载,
+# 包装 CodeEvolutionEngine 注入 scope_guard; 调度器驱动的是它)
+_true_rsi_engine: Optional[Any] = None
 # M3 治理: 代码进化引擎单例 — 与调度器共用同一实例, 保证
 # mutations 历史在 /v1/evo/* 各端点间可见 (否则每次新建引擎,
 # rollback/deploy 永远找不到历史 mutation)。
@@ -78,34 +81,50 @@ def _get_code_evolution_engine() -> Optional[Any]:
 
 
 def _start_evolution_scheduler() -> Optional[Any]:
-    """启动代码进化调度器 (M2 True RSI)。
+    """启动代码进化调度器 (M2/M4 True RSI)。
 
-    由 LAAP_EVO_ENABLED=1 显式开启 (默认关闭 — 代码级自改进是高危能力)。
+    开关 (均默认关闭 — 代码级自改进是高危能力, 必须显式授权):
+      LAAP_EVO_ENABLED=1  → M2: 调度器驱动 CodeEvolutionEngine (原行为)
+      LAAP_TRSI_ENABLED=1 → M4: 挂载 TrueRSIEngine (受限递归守卫) 并驱动之;
+                             隐含启用调度 (不依赖 LAAP_EVO_ENABLED)
+    两开关同时开启时 M4 优先 (调度器驱动 TrueRSIEngine)。
+
     服务链路 (python -m laap_brain.api) 与 AGIAgent 场景共用此入口,
     避免调度器挂在 AGIAgent.__init__ 而服务进程从未实例化 agent 导致不生效。
 
     Returns: 调度器实例 (未开启/失败时 None)。
     """
-    global _evolution_scheduler
+    global _evolution_scheduler, _code_evolution_engine, _true_rsi_engine
     if _evolution_scheduler is not None:
         return _evolution_scheduler
-    if os.environ.get("LAAP_EVO_ENABLED", "") != "1":
+    evo_on = os.environ.get("LAAP_EVO_ENABLED", "") == "1"
+    trsi_on = os.environ.get("LAAP_TRSI_ENABLED", "") == "1"
+    if not (evo_on or trsi_on):
         return None
     try:
         sys.path.insert(0, str(BRAIN_DIR))
         from laap.agi.code_evolution import CodeEvolutionEngine
         from laap.agi.evolution_scheduler import EvolutionScheduler
         engine = CodeEvolutionEngine(repo_root=str(LAAP_ROOT))
+        scheduler_engine: Any = engine
+        if trsi_on:
+            from laap.evolution.true_rsi import TrueRSIEngine
+            _true_rsi_engine = TrueRSIEngine(engine=engine)
+            scheduler_engine = _true_rsi_engine
+            logger.info("TrueRSIEngine (M4) attached (LAAP_TRSI_ENABLED=1)")
         _code_evolution_engine = engine  # M3: 引擎单例与调度器共用
         _evolution_scheduler = EvolutionScheduler(
-            engine=engine,
+            engine=scheduler_engine,
             interval_seconds=int(os.environ.get("LAAP_EVO_INTERVAL", "3600")),
         )
         _evolution_scheduler.start()
-        logger.info("EvolutionScheduler started (LAAP_EVO_ENABLED=1)")
+        logger.info(
+            f"EvolutionScheduler started (LAAP_EVO_ENABLED={evo_on}, "
+            f"LAAP_TRSI_ENABLED={trsi_on})")
     except Exception as e:
         logger.warning(f"EvolutionScheduler failed to start: {e}")
         _evolution_scheduler = None
+        _true_rsi_engine = None
     return _evolution_scheduler
 
 
@@ -535,15 +554,36 @@ async def handle_chat_completions(request):
                 psi_state=psi_state,
                 memory_context=memory_context,
             )
-            if routed:
-                tool_calls = routed.tool_calls
-                engine = routed.engine
-                response_extra = {
-                    "tool_decision": {
-                        "threshold_used": routed.threshold_used,
-                        "cognition": routed.cognition,
+            if routed and routed.tool_calls:
+                # 防御: 丢弃参数不完整的调用 (required 为空字符串/缺失),
+                # 避免 Hermes 侧执行报错 (如 skill_manage action="" → Unknown action '')
+                valid_calls = []
+                for tc in routed.tool_calls:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "")
+                    try:
+                        args = json.loads(fn.get("arguments", "{}") or "{}")
+                    except Exception:
+                        args = {}
+                    tool_schema = next(
+                        (t.get("function", {}) for t in candidate_tools
+                         if t.get("function", {}).get("name") == name),
+                        {},
+                    )
+                    required = (tool_schema.get("parameters", {}) or {}).get("required", []) or []
+                    if any(args.get(k) in (None, "") for k in required):
+                        logger.debug("Drop incomplete tool call: %s args=%s", name, args)
+                        continue
+                    valid_calls.append(tc)
+                if valid_calls:
+                    tool_calls = valid_calls
+                    engine = routed.engine
+                    response_extra = {
+                        "tool_decision": {
+                            "threshold_used": routed.threshold_used,
+                            "cognition": routed.cognition,
+                        }
                     }
-                }
         except Exception as e:
             logger.debug(f"Tool routing failed: {e}")
 
