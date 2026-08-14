@@ -8,6 +8,7 @@ paper_trading 工具包 — LAAP内部实现
 import sys, os, json
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, Any
 import sqlite3
 
 # LAAP paper_trading路径
@@ -72,32 +73,21 @@ def _health(conn) -> str:
 
 
 def _positions(conn) -> str:
-    """查看持仓（通过pending订单推断）。"""
+    """查看持仓（通过trades未平仓记录）。"""
     try:
-        # 查找pending状态的订单
+        # 检查未平仓的成交（exit_ts为空的trade）
         cursor = conn.execute("""
-            SELECT symbol, SUM(quantity) as total_qty, AVG(fill_price) as avg_price
-            FROM orders 
-            WHERE status = 'pending'
-            GROUP BY symbol
-        """)
-        rows = cursor.fetchall()
-        
-        # 同时检查trades表中未平仓的
-        cursor = conn.execute("""
-            SELECT symbol, SUM(quantity) as total_qty, entry_price
+            SELECT symbol, SUM(quantity) as total_qty, AVG(entry_price) as avg_price
             FROM trades 
             WHERE exit_ts IS NULL
             GROUP BY symbol
         """)
         open_trades = cursor.fetchall()
         
-        if not rows and not open_trades:
-            return "暂无持仓"
+        if not open_trades:
+            return "暂无持仓（无未平仓记录）"
         
         result = "当前持仓:\n"
-        for r in rows:
-            result += f"  {r[0]}: {r[1]}股 (均价{r[2]:.2f})\n"
         for t in open_trades:
             result += f"  {t[0]}: {t[1]}股 @ {t[2]:.2f}\n"
         return result
