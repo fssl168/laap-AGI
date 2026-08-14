@@ -187,6 +187,22 @@ class AGIAgent:
             llm_fn=getattr(self.hermes, 'llm_generate_patch_for_target', None),
         )
 
+        # ── M2 True RSI: 进化调度器 (LAAP_EVO_ENABLED=1 显式开启) ──
+        # 默认关闭 — 代码级自改进是高危能力, 必须显式授权才启动闭环。
+        self.evolution_scheduler = None
+        if os.environ.get("LAAP_EVO_ENABLED", "") == "1":
+            try:
+                from laap.agi.evolution_scheduler import EvolutionScheduler
+                self.evolution_scheduler = EvolutionScheduler(
+                    engine=self.code_evolution,
+                    interval_seconds=int(
+                        os.environ.get("LAAP_EVO_INTERVAL", "3600")),
+                )
+                self.evolution_scheduler.start()
+                logger.info("EvolutionScheduler started (LAAP_EVO_ENABLED=1)")
+            except Exception as e:
+                logger.warning(f"EvolutionScheduler failed to start: {e}")
+
         # ── Consciousness Harness & Unified Memory ──
         self.consciousness_harness = ConsciousnessHarness()
         self.consciousness_harness.initialize_personality()
