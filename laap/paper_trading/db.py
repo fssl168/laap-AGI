@@ -1,7 +1,8 @@
 """LAAP Paper Trading — SQLite 持久化层。
 
 对标 DSA 的 stock_analysis.db，用标准库 sqlite3（零新依赖）。
-默认库路径 <LAAP_ROOT>/data/paper_trading.db，可注入（测试用 tmp）。
+默认库路径固定项目根 <项目根>/data/paper_trading.db（不受 cwd 影响，
+与 watchlist_kline_store 一致），可注入（测试用 tmp）。
 
 注意（沙箱/挂载盘约束）: SQLite 在挂载盘（9p）会 disk I/O error，
 测试必须 TMPDIR=/tmp 且 db_path 注入 tmp 路径。
@@ -19,8 +20,17 @@ DEFAULT_DB_NAME = "paper_trading.db"
 
 
 def _default_db_path() -> str:
-    root = os.environ.get("LAAP_ROOT", str(Path.cwd()))
-    return str(Path(root) / "data" / DEFAULT_DB_NAME)
+    """数据库路径：优先 PAPER_TRADING_DB_PATH 环境变量，否则固定项目根。
+
+    默认 <项目根>/data/paper_trading.db（D:\\laap-AGI\\data\\paper_trading.db），
+    db.py 位于 <项目根>/laap/paper_trading/db.py，向上三级即项目根。
+    不用 Path.cwd()，避免服务从非项目根目录启动时数据库落到别处。
+    """
+    env_path = os.environ.get("PAPER_TRADING_DB_PATH", "")
+    if env_path:
+        return env_path
+    project_root = Path(__file__).resolve().parent.parent.parent
+    return str(project_root / "data" / DEFAULT_DB_NAME)
 
 
 # 幂等建表 schema（决策 #3 SQLite）
