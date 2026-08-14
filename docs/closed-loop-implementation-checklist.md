@@ -1,6 +1,7 @@
 # RSI 接入量化框架：记忆 × 自进化闭环 实施清单 v2（文件 + 函数级）
 
 > **日期**: 2026-08-15
+> **状态**: ✅ P0-P3 全部完成（63 项测试，442 passed / 0 failed）。复核审计见 `docs/quant-closure-audit.md`。
 > **任务**: 参考 DSA 的 `paper_trading`，在 AGI 项目内新建最小但真实的 paper_trading 框架，让 UnifiedMemory（记忆）+ 代码级受限递归（自进化）接上"真实交易决策反馈"闭环。
 > **关联**: `docs/memory-evolution-closed-loop-plan.md`（方向）、`docs/true-rsi-feasibility.md`（M1-M4）
 > **交付物**: 本清单（P0-P3 有序推进）
