@@ -123,8 +123,8 @@ chmod +x implant_laap_hermes.sh
 #### 步骤 A：启动 LAAP API
 
 ```powershell
-cd aris_brain
-python laap_brain_api.py --port 11546
+cd laap-AGI
+python -m laap_brain.api --port 11546
 ```
 
 #### 步骤 B：配置 Hermes MCP

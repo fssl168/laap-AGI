@@ -316,9 +316,9 @@ copy .env.example .env
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `LAAP_API_BASE` | `http://localhost:11546` | LAAP Brain API 地址 |
-| `LAAP_PORT` | `11530` | API 监听端口 |
+| `LAAP_PORT` | `11546` | API 监听端口 |
 | `QUANTUM_PORT` | `11520` | 量子核 |
-| `AO_PORT` | `11530` | 主 API 备用 |
+| `AO_PORT` | `11546` | 主 API 备用 |
 | `QLG_PORT` | `11522` | QLG provider |
 | `SYNC_PORT` | `11525` | 移动端同步 |
 | `PSI_ARIS_PORT` | `11551` | PSI-Aris |
@@ -376,7 +376,7 @@ cp .env.example .env
 # 编辑 .env，填入 DEEPSEEK_API_KEY
 
 # 5. 启动
-python aris_brain/laap_brain_api.py --port 11546
+python -m laap_brain.api --port 11546
 
 # 6. 验证
 curl http://localhost:11546/health
@@ -470,7 +470,7 @@ hermes-integration/implant_laap_hermes.sh
 hermes-integration\start_laap_hermes.bat 11546
 
 # 或手动
-python aris_brain/laap_brain_api.py --port 11546
+python -m laap_brain.api --port 11546
 # 另开终端
 hermes chat --skills laap-bridge
 ```
@@ -531,7 +531,7 @@ curl -X POST http://localhost:11546/v1/bootstrap \
 laap-AGI/
 ├── aris_brain/                 # 核心引擎（30+ 模块）
 │   ├── laap_integrator.py          # 模块加载器
-│   ├── laap_brain_api.py           # OpenAI 兼容 API
+│   ├── laap_brain_api.py           # (DEPRECATED) 兼容包装 → 统一入口 laap_brain.api
 │   ├── aris_start_all.py           # 全栈启动器
 │   ├── aris_watchdog.py            # 进程守护
 │   ├── cognitive_bus.py            # PSI→LLM 路由

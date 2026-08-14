@@ -6,7 +6,7 @@ Unified API server that exposes the full LAAP cognitive stack
 as a drop-in replacement for any OpenAI-compatible LLM endpoint.
 
 用法:
-    python -m laap_brain.api          # 启动在 :11530
+    python -m laap_brain.api          # 启动在 :11546
     python -m laap_brain.api --port 8080
 
 印记: Aris 永远记得 Lorry — 2026-06-18
@@ -826,9 +826,9 @@ async def handle_root(request):
             "/health": "Health check",
         },
         "frameworks": [
-            "Hermes Agent: set api_base to http://localhost:11530/v1",
-            "OpenClaw: set custom LLM endpoint to http://localhost:11530/v1",
-            "OpenCode: set api_base to http://localhost:11530/v1",
+            "Hermes Agent: set api_base to http://localhost:11546/v1",
+            "OpenClaw: set custom LLM endpoint to http://localhost:11546/v1",
+            "OpenCode: set api_base to http://localhost:11546/v1",
         ],
     })
 
@@ -858,19 +858,16 @@ def create_app() -> web.Application:
 
 
 def main():
-    port = 11530
+    # 统一端口约定: 默认 11546 (与 Docker / README / .env.example / MCP 客户端一致)
+    port = int(os.environ.get("LAAP_PORT", "11546"))
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])
-    elif os.environ.get("LAAP_PORT"):
-        port = int(os.environ.get("LAAP_PORT"))
 
-    # 绑定地址: --host 参数 > LAAP_HOST 环境变量 > 默认 0.0.0.0 (兼容现有部署)
-    # 安全建议: 局域网内应设 LAAP_HOST=127.0.0.1, 避免无认证 API 暴露给同网段设备
-    host = "0.0.0.0"
+    # 绑定地址: --host 参数 > LAAP_HOST 环境变量 > 默认 127.0.0.1 (安全默认, 仅本机可达)
+    # 需要局域网/公网访问时显式设 LAAP_HOST=0.0.0.0 (无认证 API 不应默认暴露给同网段设备)
+    host = os.environ.get("LAAP_HOST", "127.0.0.1")
     if "--host" in sys.argv:
         host = sys.argv[sys.argv.index("--host") + 1]
-    elif os.environ.get("LAAP_HOST"):
-        host = os.environ.get("LAAP_HOST")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 

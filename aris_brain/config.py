@@ -54,7 +54,7 @@ except ImportError:
     FEISHU_CHAT_ID = os.environ.get("FEISHU_CHAT_ID", "")
     QUANTUM_DIM = int(os.environ.get("QUANTUM_DIM", "1024"))
     QUANTUM_PORT = int(os.environ.get("QUANTUM_PORT", "11520"))
-    AO_PORT = int(os.environ.get("AO_PORT", "11530"))
+    AO_PORT = int(os.environ.get("AO_PORT", "11546"))
     PSI_ARIS_PORT = int(os.environ.get("PSI_ARIS_PORT", "11551"))
     PSI_AO_PORT = int(os.environ.get("PSI_AO_PORT", "11553"))
     MEMORY_CAPACITY = int(os.environ.get("MEMORY_CAPACITY", "10000"))

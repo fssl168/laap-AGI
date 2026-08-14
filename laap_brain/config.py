@@ -82,7 +82,7 @@ FEISHU_CHAT_ID = os.environ.get("FEISHU_CHAT_ID", "")
 # 量子核
 QUANTUM_DIM = int(os.environ.get("QUANTUM_DIM", "1024"))
 QUANTUM_PORT = int(os.environ.get("QUANTUM_PORT", "11520"))
-AO_PORT = int(os.environ.get("AO_PORT", "11530"))
+AO_PORT = int(os.environ.get("AO_PORT", "11546"))
 
 # PSI
 PSI_ARIS_PORT = int(os.environ.get("PSI_ARIS_PORT", "11551"))

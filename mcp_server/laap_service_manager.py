@@ -9,7 +9,7 @@ import time
 import requests
 from pathlib import Path
 
-LAAP_ROOT = Path(r"D:\laap-AGI")
+LAAP_ROOT = Path(__file__).resolve().parent.parent  # mcp_server/ → 仓库根（可移植，不依赖本地绝对路径）
 LAAP_API_SCRIPT = LAAP_ROOT / "aris_brain" / "laap_brain_api.py"
 LAAP_PORT = 11546
 LAAP_API_BASE = f"http://localhost:{LAAP_PORT}"

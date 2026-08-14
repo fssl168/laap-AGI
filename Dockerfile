@@ -62,4 +62,4 @@ ENV LAAP_PORT=11546 \
 EXPOSE 11546
 
 # 启动 LAAP Brain API
-CMD ["python", "aris_brain/laap_brain_api.py", "--port", "11546"]
+CMD ["python", "-m", "laap_brain.api", "--port", "11546"]

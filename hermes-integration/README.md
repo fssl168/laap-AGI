@@ -9,7 +9,7 @@
 
 ### LAAP 侧
 
-- 扩展 `aris_brain/laap_brain_api.py`：
+- 扩展 `laap_brain/api.py`（统一入口，旧 `aris_brain/laap_brain_api.py` 已收敛为兼容包装）：
   - `POST /v1/cognitive_state` — 获取 PSI 认知状态
   - `POST /v1/recall_memory` — 召回 LAAP 记忆
   - `POST /v1/reflect` — 反思并更新状态
@@ -26,8 +26,8 @@
 ### 1. 启动 LAAP API
 
 ```powershell
-cd D:\laap-AGI\aris_brain
-python laap_brain_api.py --port 11546
+cd D:\laap-AGI
+python -m laap_brain.api --port 11546
 ```
 
 ### 2. 配置 Hermes MCP

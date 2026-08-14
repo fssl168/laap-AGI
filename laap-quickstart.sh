@@ -194,7 +194,7 @@ case "$mode" in
         pip install -q -e . 2>/dev/null || true
 
         info "启动 LAAP Brain API (端口 11546)..."
-        nohup python aris_brain/laap_brain_api.py --port 11546 > /tmp/laap.log 2>&1 &
+        nohup python -m laap_brain.api --port 11546 > /tmp/laap.log 2>&1 &
         LAAP_PID=$!
         echo "$LAAP_PID" > /tmp/laap.pid
         ok "LAAP 进程 PID: $LAAP_PID"
