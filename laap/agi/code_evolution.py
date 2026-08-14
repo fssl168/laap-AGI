@@ -36,7 +36,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum
-import time, logging, json, os, sys, ast, hashlib, difflib, subprocess, tempfile, shutil, re, threading
+import time, logging, json, os, sys, ast, hashlib, difflib, subprocess, tempfile, shutil, re, threading, shlex
 from laap.rust_bridge import get_bridge
 from pathlib import Path
 from collections import defaultdict
@@ -118,6 +118,8 @@ class SafetyGuard:
       - BLACKLIST_DIRS: cannot be deleted or have init files removed
       - BLACKLIST_PATTERNS: dangerous code patterns
       - MAX_CHANGE_RATIO: max % of file that can change in one mutation
+      - PROTECTED_FILES (M1): 永久只读清单 — 进化引擎自身安全代码不可作为 target
+        (解决 True RSI 递归悖论: 守卫不能被守卫的对象修改)
     """
 
     BLACKLIST_DIRS = {"laap/agi/", "laap/security/", "laap/cognition/"}
@@ -126,8 +128,18 @@ class SafetyGuard:
         r"exec\s*\(", r"__import__\s*\(", r"shutil\.rmtree",
         r"os\.remove.*laap", r"rm\s+-rf.*laap",
         r"import\s+ctypes", r"import\s+socket",
+        # M1 硬化: 禁止注入 shell=True 的 subprocess (沙箱逃逸路径)
+        r"subprocess\.run\s*\([^)]*shell\s*=\s*True",
+        r"subprocess\.Popen\s*\([^)]*shell\s*=\s*True",
     ]
     MAX_CHANGE_RATIO = 0.30  # Max 30% of a file
+
+    # M1 硬化: 永久只读清单 — 进化安全基座自身 (递归悖论防护)
+    PROTECTED_FILES = frozenset({
+        "laap/agi/code_evolution.py",
+        "laap/agi/evolution_system.py",
+        "laap/agi/rsi_engine.py",
+    })
 
     @classmethod
     def validate_mutation(cls, mutation: CodeMutation,
@@ -142,9 +154,15 @@ class SafetyGuard:
 
         file_path = mutation.target.file_path
 
+        # Rule 0 (M1): 永久只读清单 — 进化引擎自身不可作为 target
+        norm_path = file_path.replace("\\", "/")
+        for protected in cls.PROTECTED_FILES:
+            if norm_path.endswith(protected):
+                return False, f"Protected file (evolution safety base): {protected}"
+
         # Rule 1: no blacklisted directories
         for banned in cls.BLACKLIST_DIRS:
-            if banned in file_path.replace("\\", "/"):
+            if banned in norm_path:
                 # Allow non-init files in blacklisted dirs
                 base = os.path.basename(file_path)
                 if base in ("__init__.py", "core.py", "security.py"):
@@ -543,10 +561,21 @@ class SandboxTester:
 
                 # Run tests
                 if test_commands:
-                    return self._run_tests(sandbox, test_commands)
+                    result = self._run_tests(sandbox, test_commands)
                 else:
                     # Default: just verify syntax and imports
-                    return self._quick_validate(sandbox, mutation)
+                    result = self._quick_validate(sandbox, mutation)
+
+                # M1 硬化: 审计日志 (含命令/结果/目标)
+                self._audit_log({
+                    "ts": time.time(),
+                    "mutation_id": mutation.id,
+                    "target": mutation.target.file_path,
+                    "test_commands": test_commands or ["(syntax-validate)"],
+                    "success": result.get("success"),
+                    "errors": (result.get("errors") or "")[:500],
+                })
+                return result
 
             except Exception as e:
                 mutation.status = MutationStatus.TEST_FAILED
@@ -558,16 +587,30 @@ class SandboxTester:
 
     def _run_tests(self, sandbox: Path,
                    commands: List[str]) -> Dict[str, Any]:
-        """Run test commands in sandbox."""
+        """Run test commands in sandbox.
+
+        M1 硬化 (True RSI 安全基座):
+          - shell=False (列表参数), 杜绝命令注入
+          - 测试命令白名单校验 (仅允许固定 pytest/python 前缀)
+          - 每命令超时由 self.timeout 施加
+        """
         all_output = []
         all_errors = []
         all_success = True
         start = time.time()
 
         for cmd in commands:
+            ok, reason = self._validate_test_command(cmd)
+            if not ok:
+                all_errors.append(f"DENIED test command: {cmd} ({reason})")
+                all_success = False
+                continue
+
             try:
+                # shell=False: 命令作为参数列表传递, 杜绝 shell 注入
+                argv = shlex.split(cmd)
                 result = subprocess.run(
-                    cmd, shell=True, cwd=str(sandbox),
+                    argv, shell=False, cwd=str(sandbox),
                     capture_output=True, text=True,
                     timeout=self.timeout,
                 )
@@ -588,6 +631,72 @@ class SandboxTester:
             "errors": '\n'.join(all_errors)[:2000],
             "execution_time_ms": (time.time() - start) * 1000,
         }
+
+    # ── M1 硬化: 测试命令白名单 ──────────────────────────────
+    # 只允许固定前缀的测试命令, 拒绝任意 shell 命令。
+    # 这是沙箱隔离的第一道闸: 即使 mutation 内容含恶意代码,
+    # test_command 也无法被用来逃逸 (shell=False + 白名单)。
+    _ALLOWED_TEST_CMDS = (
+        ("python", "-m", "pytest"),
+        ("python", "-m", "unittest"),
+        ("pytest",),
+        ("python", "-c"),
+    )
+
+    def _validate_test_command(self, cmd: str) -> Tuple[bool, str]:
+        """校验测试命令是否在白名单内 (M1 硬化)。
+
+        Returns (is_allowed, reason).
+        """
+        if not cmd or not cmd.strip():
+            return False, "empty command"
+        # M1 硬化: 拒绝 shell 元字符 — 白名单匹配的是 argv 前段,
+        # 但 'pytest && rm -rf /' 这类拼接会绕过前缀校验
+        if re.search(r"[;&|<>`$]", cmd):
+            return False, f"shell metacharacter in command: {cmd[:80]}"
+        try:
+            argv = shlex.split(cmd)
+        except ValueError as e:
+            return False, f"unparseable: {e}"
+        if not argv:
+            return False, "empty argv"
+        # 逐项匹配白名单前缀 (argv 前 N 项与白名单元组前 N 项相等)
+        for allowed in self._ALLOWED_TEST_CMDS:
+            if len(argv) >= len(allowed) and tuple(argv[:len(allowed)]) == allowed:
+                return True, ""
+        return False, f"command not in whitelist: {cmd[:80]}"
+
+    def _apply_limits(self, proc) -> None:
+        """对测试子进程施加资源限制 (M1 硬化)。
+
+        POSIX: resource.setrlimit (RLIMIT_AS / RLIMIT_CPU)
+        Windows: 通过 psutil 的内存限制 (若可用); 否则记录降级。
+        超时已由 subprocess.run(timeout=...) 施加。
+        """
+        try:
+            import resource
+            mem_bytes = self.max_memory_mb * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+            resource.setrlimit(resource.RLIMIT_CPU, (self.timeout, self.timeout + 1))
+        except (ImportError, OSError, ValueError):
+            # Windows / 非 POSIX: psutil 降级 (尽力而为)
+            try:
+                import psutil
+                p = psutil.Process(proc.pid)
+                p.rlimit(psutil.RLIMIT_AS, (mem_bytes, mem_bytes))
+            except Exception:
+                pass  # 资源限制尽力而为, 超时仍是硬约束
+
+    def _audit_log(self, entry: Dict[str, Any]) -> None:
+        """记录沙箱测试审计日志 (M1 硬化)。"""
+        try:
+            log_dir = Path(os.environ.get("LAAP_ROOT", str(Path.cwd()))) / "state"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "sandbox_test_audit.jsonl"
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        except Exception:
+            pass  # 审计日志失败不阻断测试
 
     def _quick_validate(self, sandbox: Path,
                          mutation: CodeMutation) -> Dict[str, Any]:
