@@ -271,3 +271,24 @@ self.code_evolution = CodeEvolutionEngine(
 4. **不自动部署** — `improve()` 恒以 `auto_deploy=False` 产出提案，走 `/v1/evo/deploy` 人工批准；批准部署 `true_rsi.py` 提案时同步消耗递归配额。
 
 **验证**（`tests/test_true_rsi.py` 24 项）：永久只读 10 项、作用域外 4 项（含目录穿越）、业务代码放行 1 项、递归深度 4 项、治理审计 2 项、接线回归 2 项、stats 1 项。守卫异常按 fail-closed 拒绝处理（守卫自身抛错 → mutation 被拒，不落入补丁生成）。
+
+---
+
+## 6.3 服务链路挂载（2026-08-15 commit `1efd563`）
+
+TrueRSIEngine 挂载到服务链路（`laap_brain/api.py`），复用 M2 的调度入口，开关均默认关闭：
+
+| 开关 | 行为 |
+|---|---|
+| `LAAP_EVO_ENABLED=1` | M2: 调度器驱动 CodeEvolutionEngine（原行为） |
+| `LAAP_TRSI_ENABLED=1` | M4: 挂载 TrueRSIEngine（受限递归守卫）并驱动之；隐含启用调度，不依赖 EVO 开关 |
+| 两开关同时开 | M4 优先（调度器驱动 TrueRSIEngine） |
+| `LAAP_EVO_INTERVAL` | tick 周期（两模式共用，默认 3600s） |
+
+**接线要点**：
+
+- `_start_evolution_scheduler()` 新增 `_true_rsi_engine` 单例；`LAAP_TRSI_ENABLED=1` 时 `TrueRSIEngine(engine)` 包装 CodeEvolutionEngine 注入 scope_guard，调度器驱动该包装器。
+- M3 治理 API（`/v1/evo/*`）仍指向原始 `_code_evolution_engine`（与 TrueRSIEngine 共享同一 mutations 历史）——人工批准/回滚语义不变。
+- `TrueRSIEngine.auto_improve` 与 `EvolutionScheduler` 接口兼容，恒强制 `auto_deploy=False`（M4 约束 4：永不自动部署）。
+
+**测试**: `tests/test_true_rsi_scheduler.py` +9 项（默认关 / TRSI 启动且驱动 TrueRSIEngine / 守卫注入 / M3 API 仍指原始引擎 / EVO-only 回归 / 双开关 M4 优先 / 幂等 / interval / auto_improve 兼容）。基线 370 → **379 passed / 0 failed**。
