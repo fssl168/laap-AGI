@@ -38,18 +38,30 @@ class PaperLedger:
     # ════════════════════════════════════════════════════════
 
     def submit_signal(self, signal: PaperSignal,
-                      client_request_id: Optional[str] = None) -> PaperOrder:
+                      client_request_id: Optional[str] = None,
+                      memory: Any = None) -> PaperOrder:
         """下单（client_request_id 幂等，参考 DSA T-13）。
 
         Args:
             signal: 交易信号
             client_request_id: 幂等键；同一 id 重复提交返回同一订单。
+            memory: UnifiedMemory（可选）。闭环 A-2：下单前注入记忆 prompt，
+                使 rationale 携带历史经验依据。
         """
         # 幂等：client_request_id 已存在 → 返回已有订单
         if client_request_id:
             existing = self._order_by_client_request_id(client_request_id)
             if existing is not None:
                 return existing
+
+        # A-2 参与推理：注入记忆（延迟导入，避免顶层循环依赖）
+        if memory is not None:
+            try:
+                from laap.paper_trading.memory_bridge import inject_memory_prompt
+                prompt = inject_memory_prompt(memory, signal.symbol, signal.action.value)
+                signal.rationale = (signal.rationale + "\n[memory]\n" + prompt).strip()
+            except Exception as e:
+                logger.warning(f"memory injection skipped: {e}")
 
         signal_id = signal.symbol + ":" + str(int(signal.ts * 1000))
         order_id = "ord_" + uuid.uuid4().hex[:12]
