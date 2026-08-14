@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "ops" / "_read_and_memorize.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "market" / "_read_and_memorize.py"
 
 
 @pytest.fixture(scope="module")

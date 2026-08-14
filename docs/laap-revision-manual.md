@@ -502,6 +502,12 @@ pip install ./laap-enterprise && python -c "import laap_enterprise.rbac, laap_en
 1. 逐文件判定归属：
    - **看板/K线/行情类**（`_kline_chart.py`、`_candidate_chart.py`、`_market_summary_demo.py`、`_memorize_*`、`_morning_score.py`、`_short_term_pick.py`、`_watchlist_*`、`_query_stock_demo.py`）→ `scripts/market/`；
    - **记忆/语音/论文类**（`_memorize_*`、`_read_and_memorize.py`、`_record_watchlist.py`、`_aris_speak.py`、`_latest_llm_papers.py`、`_search_papers_demo.py`、`_psi_probe.py`）→ `scripts/ops/`。
+
+   > **现状注记 (2026-08, 第二轮评估)**: 外部 NAS 同步已将论文类脚本
+   > `_read_and_memorize.py`/`_latest_llm_papers.py`/`_search_papers_demo.py` 从
+   > `scripts/ops/` 移入 `scripts/market/`（内容一致）。当前 `scripts/ops/` 保留
+   > `_aris_speak.py`/`_psi_probe.py`/`aris_chat.py`/`aris_voice.py` 等语音运维类。
+   > 测试 `tests/test_read_and_memorize.py` 路径已同步更新（本轮修复回归）。
 2. `git mv` 归档后，修复内部相对路径引用（这些脚本多依赖 `watchlist_kline_store.py`、`aris_brain/` 的 `sys.path` 注入——把注入路径改为相对脚本位置的解析）。
 3. 同步迁移 `tests/test_kline_chart.py`、`test_candidate_chart.py` 的 import 路径（或按 R4 决策一并归档）。
 4. `.gitignore:59-62`：`_gen_*.py`/`_build_*.py` 模式保留（归档后根目录不再有 `_*.py` 冲突）。
