@@ -132,7 +132,7 @@ LAAP 社区版代码以分层许可发布，详见 [LICENSING.md](LICENSING.md)�
 如需商业授权、合作洽谈或投资咨询，请联系：
 
 - **项目维护者**: Lorry
-- **项目仓库**: https://github.com/lorryjovens-hub/laap-AGI
+- **项目仓库**: https://github.com/fssl168/laap-AGI
 - **官方网站**: https://laap-agi.netlify.app
 
 ---

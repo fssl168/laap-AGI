@@ -122,7 +122,7 @@ LAAP 项目采用**分层许可策略**，不同模块可能分别适用以下�
 如有关于本 CLA 的疑问，请联系：
 
 - **项目维护者**: Lorry
-- **项目仓库**: https://github.com/lorryjovens-hub/laap-AGI
+- **项目仓库**: https://github.com/fssl168/laap-AGI
 - **官方网站**: https://laap-agi.netlify.app
 
 ---

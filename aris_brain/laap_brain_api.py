@@ -577,7 +577,7 @@ async def handle_root(request):
             "OpenClaw: set custom LLM endpoint to http://localhost:11530/v1",
             "OpenCode: set api_base to http://localhost:11530/v1"
         ],
-        "docs": "https://github.com/lorryjovens-hub/laap-AGI",
+        "docs": "https://github.com/fssl168/laap-AGI",
         "bootstrap": "POST /v1/bootstrap with {\"user_name\": \"yourname\"}"
     })
 

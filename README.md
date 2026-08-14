@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/lorryjovens-hub/laap-AGI/blob/main/LICENSE">
+  <a href="https://github.com/fssl168/laap-AGI/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"/>
   </a>
   <img src="https://img.shields.io/badge/Commercial%20License-Available-orange.svg" alt="Commercial License"/>
@@ -338,7 +338,7 @@ copy .env.example .env
 
 ```bash
 # 1. 克隆
-git clone https://github.com/lorryjovens-hub/laap-AGI.git
+git clone https://github.com/fssl168/laap-AGI.git
 cd laap-AGI
 
 # 2. 配置环境变量（只需要必填项）
@@ -360,7 +360,7 @@ curl http://localhost:11546/health
 
 ```bash
 # 1. 克隆
-git clone https://github.com/lorryjovens-hub/laap-AGI.git
+git clone https://github.com/fssl168/laap-AGI.git
 cd laap-AGI
 
 # 2. 虚拟环境
@@ -387,7 +387,7 @@ curl http://localhost:11546/health
 什么都不想看，就想让它跑起来：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lorryjovens-hub/laap-AGI/main/laap-quickstart.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fssl168/laap-AGI/main/laap-quickstart.sh | bash
 ```
 
 脚本会自动检测环境、引导填写 API Key、选择部署模式并唤醒 Aris。

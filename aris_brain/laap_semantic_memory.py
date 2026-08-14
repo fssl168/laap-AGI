@@ -1,18 +1,7 @@
+# -*- coding: utf-8 -*-
 """
-LAAP Semantic Memory — vector-based episodic memory retrieval.
-
-Design:
-  - Store memories as {id, text, timestamp, embedding, meta}
-  - Pluggable embedding provider (API or local model)
-  - In-memory index + JSON persistence
-  - Cosine-similarity top-k retrieval
-
-Default provider priority:
-  1. OPENAI_API_KEY (or DEEPSEEK_API_KEY + OPENAI_BASE_URL) -> OpenAI-compatible embedding API
-  2. sentence-transformers local model (if installed)
-  3. Pure-numpy TF-IDF fallback
+LAAP Semantic Memory — 支持OpenAI兼容API和本地sentence-transformers
 """
-
 import hashlib
 import json
 import logging
@@ -36,7 +25,7 @@ DEFAULT_EMBEDDING_DIM = 1536
 class EmbeddingProvider:
     """Base class for embedding providers."""
 
-    def embed(self, texts: List[str]) -> List[List[float]]:
+    def embed(self, texts: List[str], fit: bool = False) -> List[List[float]]:
         raise NotImplementedError
 
 
@@ -53,7 +42,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
         self.base_url = base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
         self.model = model
 
-    def embed(self, texts: List[str]) -> List[List[float]]:
+    def embed(self, texts: List[str], fit: bool = False) -> List[List[float]]:
         import requests
 
         if not self.api_key:
@@ -73,13 +62,18 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
 class SentenceTransformersProvider(EmbeddingProvider):
     """Local sentence-transformers model."""
 
-    def __init__(self, model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"):
+    def __init__(self, model_name: str = "BAAI/bge-small-zh"):
         from sentence_transformers import SentenceTransformer
 
+        # 设置HF镜像
+        os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+        
         self.model = SentenceTransformer(model_name)
+        self.dim = self.model.get_sentence_embedding_dimension()
 
-    def embed(self, texts: List[str]) -> List[List[float]]:
-        return self.model.encode(texts, convert_to_numpy=True).tolist()
+    def embed(self, texts: List[str], fit: bool = False) -> List[List[float]]:
+        embeddings = self.model.encode(texts, convert_to_numpy=True)
+        return embeddings.tolist()
 
 
 class TfidfEmbeddingProvider(EmbeddingProvider):
@@ -113,8 +107,19 @@ class TfidfEmbeddingProvider(EmbeddingProvider):
             for tok in seen:
                 self.df[tok] = self.df.get(tok, 0) + 1
 
-    def embed(self, texts: List[str]) -> List[List[float]]:
+    def reset(self):
+        """清空文档频率统计 (加载记忆库后重建用)。"""
+        self.df = {}
+        self.n_docs = 0
+
+    def fit_all(self, texts: List[str]):
+        """按全部记忆文本重建 df/n_docs, 保证向量计算状态一致。"""
+        self.reset()
         self._fit(texts)
+
+    def embed(self, texts: List[str], fit: bool = True) -> List[List[float]]:
+        if fit:
+            self._fit(texts)
         vectors = []
         for text in texts:
             tokens = self._tokenize(text)
@@ -144,7 +149,7 @@ class KeywordEmbeddingProvider(EmbeddingProvider):
     def _tokenize(self, text: str) -> List[str]:
         return re.findall(r"[\u4e00-\u9fff]|\w+", text.lower())
 
-    def embed(self, texts: List[str]) -> List[List[float]]:
+    def embed(self, texts: List[str], fit: bool = False) -> List[List[float]]:
         vectors = []
         for text in texts:
             tokens = self._tokenize(text)
@@ -370,10 +375,9 @@ def _get_vector_db_backend(path: Path) -> MemoryBackend:
 
 def _get_embedding_provider() -> EmbeddingProvider:
     """Return best available embedding provider."""
-    # API embeddings only make sense with a real OpenAI key, or a DeepSeek-style
-    # key pointed at an explicit OpenAI-compatible base_url. A bare DEEPSEEK_API_KEY
-    # against the default api.openai.com base is always invalid (401) and would
-    # silently kill every recall — so skip the API provider in that case.
+    # 优先级: OpenAI兼容API > 本地sentence-transformers > TF-IDF
+    
+    # 1. OpenAI兼容API
     has_api_key = os.environ.get("OPENAI_API_KEY") or (
         os.environ.get("DEEPSEEK_API_KEY") and os.environ.get("OPENAI_BASE_URL")
     )
@@ -383,11 +387,14 @@ def _get_embedding_provider() -> EmbeddingProvider:
         except Exception as e:
             logger.warning(f"OpenAI embedding provider failed: {e}")
 
+    # 2. 本地sentence-transformers模型
     try:
-        return SentenceTransformersProvider()
+        model_name = os.environ.get("LAAP_EMBEDDING_MODEL", "BAAI/bge-small-zh")
+        return SentenceTransformersProvider(model_name)
     except Exception as e:
         logger.warning(f"Local embedding provider failed: {e}")
 
+    # 3. 降级到TF-IDF
     logger.warning("Using pure-numpy TF-IDF embeddings (no torch required)")
     return TfidfEmbeddingProvider()
 
@@ -407,6 +414,24 @@ class LaapSemanticMemory:
             logger.warning(f"Failed to load semantic memory: {e}")
             self.memories = []
 
+        # TF-IDF provider: 启动时重建文档频率统计并重算全部向量。
+        if isinstance(self.provider, TfidfEmbeddingProvider):
+            try:
+                texts = [m["text"] for m in self.memories if m.get("text")]
+                self.provider.fit_all(texts)
+                reembedded = 0
+                for mem in self.memories:
+                    if mem.get("text"):
+                        mem["embedding"] = self.provider.embed([mem["text"]], fit=False)[0]
+                        reembedded += 1
+                if reembedded and isinstance(self.backend, JsonMemoryBackend):
+                    self.backend._save(self.memories)
+                logger.info(f"TF-IDF index rebuilt: {reembedded} memories, {len(self.provider.df)} tokens")
+            except Exception as e:
+                logger.warning(f"TF-IDF rebuild failed: {e}")
+            logger.info(f"Loaded {len(self.memories)} semantic memories")
+            return
+
         # Re-embed memories if provider dimension changed
         expected_dim = None
         try:
@@ -424,7 +449,6 @@ class LaapSemanticMemory:
                     logger.warning(f"Re-embedding failed for {mem.get('id')}: {e}")
         if reembedded:
             logger.info(f"Re-embedded {reembedded} memories due to provider change")
-            # For JSON backend we can rewrite; Chroma already stores updated embeddings below
             if isinstance(self.backend, JsonMemoryBackend):
                 self.backend._save(self.memories)
         logger.info(f"Loaded {len(self.memories)} semantic memories")
@@ -450,7 +474,6 @@ class LaapSemanticMemory:
             self.backend.add(memory)
         except Exception as e:
             logger.warning(f"Backend add failed, falling back to JSON save: {e}")
-            # Last resort: ensure JSON file is consistent
             if not isinstance(self.backend, JsonMemoryBackend):
                 JsonMemoryBackend(self.path)._save(self.memories)
         return mem_id
@@ -461,7 +484,7 @@ class LaapSemanticMemory:
             return []
 
         try:
-            query_vec = np.array(self.provider.embed([query])[0], dtype=np.float32)
+            query_vec = np.array(self.provider.embed([query], fit=False)[0], dtype=np.float32)
         except Exception as e:
             logger.warning(f"Query embedding failed: {e}")
             return []

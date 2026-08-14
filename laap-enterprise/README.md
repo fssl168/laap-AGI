@@ -2,7 +2,7 @@
 
 **状态**: 本地脚手架 / 规划中  
 **许可证**: 商业授权协议（闭源）  
-**依赖**: [laap-AGI](https://github.com/lorryjovens-hub/laap-AGI) 社区版
+**依赖**: [laap-AGI](https://github.com/fssl168/laap-AGI) 社区版
 
 ---
 

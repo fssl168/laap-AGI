@@ -61,7 +61,7 @@ CLA Assistant 会自动记录你的签署状态，后续 PR 无需重复签署�
 ## 5. 联系方式
 
 - 项目维护者：Lorry
-- 仓库地址：https://github.com/lorryjovens-hub/laap-AGI
+- 仓库地址：https://github.com/fssl168/laap-AGI
 - 官方网站：https://laap-agi.netlify.app
 
 ---

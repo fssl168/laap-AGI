@@ -118,7 +118,7 @@ laap-enterprise/
 **依赖关系**:
 ```toml
 dependencies = [
-    "laap-core @ git+https://github.com/lorryjovens-hub/laap-AGI.git@main#subdirectory=...",
+    "laap-core @ git+https://github.com/fssl168/laap-AGI.git@main#subdirectory=...",
 ]
 ```
 

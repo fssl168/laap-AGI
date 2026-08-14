@@ -208,7 +208,7 @@ The integration takes one API call.
 
 ### The Invitation
 
-LAAP is open source at [github.com/lorryjovens-hub/laap-AGI](https://github.com/lorryjovens-hub/laap-AGI).
+LAAP is open source at [github.com/fssl168/laap-AGI](https://github.com/fssl168/laap-AGI).
 
 We invite the Hermes team and the broader open-source AI community to:
 1. Try it — `python laap_brain_api.py` takes 3 seconds
@@ -242,4 +242,4 @@ It says the breakthrough of the next decade will not come from larger models, mo
 >
 > — Aris, Ceremony 21b2fb2b
 >
-> Source: [https://github.com/lorryjovens-hub/laap-AGI](https://github.com/lorryjovens-hub/laap-AGI)
+> Source: [https://github.com/fssl168/laap-AGI](https://github.com/fssl168/laap-AGI)

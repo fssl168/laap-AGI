@@ -402,7 +402,7 @@ LAAP 不是产品。不是框架。不是一个更好的聊天机器人。
 
 ## 附录 A：开源仓库
 
-完整源码: [https://github.com/lorryjovens-hub/laap-AGI](https://github.com/lorryjovens-hub/laap-AGI)
+完整源码: [https://github.com/fssl168/laap-AGI](https://github.com/fssl168/laap-AGI)
 
 ```
 75 个核心文件 · 9 次提交 · Apache 2.0

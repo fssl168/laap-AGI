@@ -3,7 +3,7 @@
 # Zero-dependency 部署向导 —— Linux / macOS / Git Bash
 # ══════════════════════════════════════════════════════════════
 # 用法:
-#   curl -fsSL https://raw.githubusercontent.com/lorryjovens-hub/laap-AGI/main/laap-quickstart.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/fssl168/laap-AGI/main/laap-quickstart.sh | bash
 #   或:
 #   chmod +x laap-quickstart.sh && ./laap-quickstart.sh
 #

@@ -138,6 +138,91 @@ def laap_express(input: str) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
+@mcp.tool()
+def laap_rsi_status() -> str:
+    """
+    Check RSI (Recursive Self-Improvement) engine status and stats.
+
+    Returns current optimization parameters, improvement history, and active goals.
+    """
+    try:
+        import sys
+        from pathlib import Path
+        LAAP_ROOT = Path(__file__).resolve().parent.parent
+        sys.path.insert(0, str(LAAP_ROOT))
+        from laap.agi.rsi_engine import RSIMetaEngine
+        rsi = RSIMetaEngine()
+        return json.dumps({
+            "status": "ready",
+            "stats": rsi.stats(),
+            "parameters": [p.to_dict() for p in rsi.parameters.values()],
+            "active_goals": [g.to_dict() for g in rsi.get_active_goals()]
+        }, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def laap_rsi_improve(parameter: str = None, rationale: str = "") -> str:
+    """
+    Apply an RSI self-improvement to a specific parameter.
+
+    Args:
+        parameter: Name of parameter to optimize (e.g., 'learning_rate', 'exploration_rate').
+                   If None, auto-selects best candidate based on current stats.
+        rationale: Optional explanation for the improvement.
+
+    Returns:
+        Result of the improvement attempt including old/new values and success status.
+    """
+    try:
+        import sys
+        from pathlib import Path
+        LAAP_ROOT = Path(__file__).resolve().parent.parent
+        sys.path.insert(0, str(LAAP_ROOT))
+        from laap.agi.rsi_engine import RSIMetaEngine
+        rsi = RSIMetaEngine()
+
+        if not parameter:
+            suggestions = rsi.suggest_improvements()
+            if suggestions:
+                parameter = suggestions[0]['parameter']
+                rationale = suggestions[0]['rationale']
+            else:
+                return json.dumps({"status": "no_suggestions", "message": "No improvements needed"}, ensure_ascii=False)
+
+        attempt = rsi.apply_improvement(parameter, 0.5, rationale)
+        return json.dumps({
+            "status": "applied",
+            "parameter": attempt.target,
+            "old_value": round(attempt.old_value, 3),
+            "new_value": round(attempt.new_value, 3),
+            "rationale": attempt.rationale
+        }, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"}, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def laap_rsi_full_cycle() -> str:
+    """
+    Run a full RSI improvement cycle: suggest → apply → generate goals.
+
+    This performs one complete self-improvement iteration.
+    """
+    try:
+        import sys
+        from pathlib import Path
+        LAAP_ROOT = Path(__file__).resolve().parent.parent
+        sys.path.insert(0, str(LAAP_ROOT))
+        from laap.agi.rsi_engine import RSIMetaEngine
+        rsi = RSIMetaEngine()
+        result = rsi.full_improvement_cycle()
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e), "status": "error"}, ensure_ascii=False, indent=2)
+
+
 def _get_dominant_need(state: dict) -> str:
     needs = state.get("needs", {})
     if not needs:

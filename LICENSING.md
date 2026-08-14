@@ -140,7 +140,7 @@ BSL 1.1 下的“生产环境使用”包括但不限于：
 如需将 BSL 1.1 层级用于生产环境，或使用 Rust PSI Core / 企业功能，请联系：
 
 - **项目维护者**: Lorry
-- **项目仓库**: https://github.com/lorryjovens-hub/laap-AGI
+- **项目仓库**: https://github.com/fssl168/laap-AGI
 - **官方网站**: https://laap-agi.netlify.app
 
 ---

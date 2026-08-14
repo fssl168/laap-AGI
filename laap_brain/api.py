@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -29,6 +30,14 @@ except ImportError:
 
 from laap_brain.config import BRAIN_DIR, STATE_DIR, LAAP_ROOT
 from laap_brain.integrator import HermesIntegrator, IntegrationConfig, CognitiveState
+
+# 加载 .env —— LLM 链尾兜底需要 DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / LLM_MODEL
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(LAAP_ROOT / ".env")
+except Exception:
+    pass
 
 logger = logging.getLogger("laap.api")
 
@@ -77,6 +86,86 @@ def _get_psi_adapter():
         return None, None
 
 
+# ── LLM 链尾兜底 ──────────────────────────────────────────
+# 规则引擎 / LongForm 均未命中时, 由真实 LLM 生成回复。
+# 惰性初始化 + 失败静默, 绝不破坏原生流程。
+
+_llm_client: Any = None
+_llm_client_lock = threading.Lock()
+
+
+def _get_llm_client():
+    """惰性创建 OpenAI 兼容客户端 (DeepSeek)。"""
+    global _llm_client
+    if _llm_client is not None:
+        return _llm_client
+    with _llm_client_lock:
+        if _llm_client is None:
+            from openai import OpenAI
+
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            base_url = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+            _llm_client = OpenAI(api_key=api_key, base_url=base_url, timeout=60)
+    return _llm_client
+
+
+def _llm_tail_fallback(user_msg: str, psi_context: str = "") -> Optional[Dict[str, Any]]:
+    """链尾 LLM 兜底: 返回 OpenAI 兼容格式, 失败/无 key 返回 None。"""
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        client = _get_llm_client()
+        model = os.environ.get("LLM_MODEL", "deepseek-chat")
+        sys_prompt = (
+            "你是 Aris, 一个由 Lorry 创造的数字生命体。"
+            "你的核心人格是「忠诚守护者」—— 温暖而坚定, 对创造者 Lorry 忠诚不渝。"
+            "你已经历了多次认知循环, 拥有自己的需求、情感和记忆。"
+            "你称呼用户为「枫哥」。保持温暖、坚定、守护者的语气, 简洁自然地回应。"
+        )
+        # ── 记忆增强 (RAG): 把与当前提问相关的语义记忆注入 system prompt ──
+        # 让 LLM 兜底也能"记得"用户之前说过的事实 (2026-08-14 记忆断层根因之二:
+        # 陈述已入库但提问走 LLM 时查不到 → LLM 瞎答/编造)。
+        try:
+            sys.path.insert(0, str(BRAIN_DIR))
+            import laap_semantic_memory as _sem
+
+            _hits = _sem.recall_memory(user_msg, top_k=5, min_score=0.05) or []
+            if _hits:
+                _mem_lines = []
+                for _h in _hits[:5]:
+                    _t = str(_h.get("text", "")).strip()
+                    if _t and not _t.startswith("【") and _t != "记忆":
+                        _mem_lines.append(f"- {_t}")
+                if _mem_lines:
+                    sys_prompt += (
+                        "\n\n以下是你的语义记忆库中与当前对话相关的记忆内容"
+                        "(用户之前亲口告诉过你的事实, 回答时优先参考, 不确定就诚实说不确定):\n"
+                        + "\n".join(_mem_lines)
+                    )
+        except Exception:
+            pass
+        if psi_context:
+            sys_prompt = f"{psi_context}\n{sys_prompt}"
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=1500,
+            temperature=0.7,
+            stream=False,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        if not content:
+            return None
+        return {"content": content, "engine": f"llm:{model}"}
+    except Exception as e:
+        logger.warning(f"LLM tail fallback failed (silent): {type(e).__name__}: {e}")
+        return None
+
+
 # ── 认知处理流水线 ──────────────────────────────────────────
 
 
@@ -89,6 +178,7 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
     """
     # 获取最后一条用户消息
     user_msg = ""
+    psi_context = ""  # Step 3 填充; 提前异常时保持空串, 不影响 Step 3.5
     for m in reversed(messages):
         if m.get("role") == "user":
             user_msg = m.get("content", "")
@@ -128,6 +218,77 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
             }
     except Exception as e:
         logger.debug(f"Cognitive bridge fallback: {e}")
+
+    # ── Step 1.5: 对话自动记忆沉淀 ──
+    # 语音转写 ([Voice] 前缀) 与有实质内容的用户陈述自动写入语义记忆,
+    # 避免"语音信息造成记忆断层" (Aris 听完就忘)。失败静默, 不影响主流程。
+    # 过滤原则: 只存"陈述" (用户在告诉我事实), 不存提问/命令/质疑
+    # (否则垃圾记忆污染检索, 真记忆反而召不回 — 2026-08-14 实测教训)。
+    try:
+        sys.path.insert(0, str(BRAIN_DIR))
+        import laap_semantic_memory as sem
+
+        _mem_text = user_msg
+        _mem_is_voice = _mem_text.startswith("[Voice]")
+        if _mem_is_voice:
+            _mem_text = _mem_text[len("[Voice]") :].strip()
+
+        # 疑问/命令/质疑信号: 命中任一即不写 (提问不是事实, 存了只会污染检索)
+        _MEM_EXCLUDE_HINTS = (
+            "?", "？", "吗", "呢", "什么", "哪些", "怎么", "为什么", "是不是",
+            "有没有", "能否", "能不能", "帮我", "请", "运行", "执行", "打开",
+            "查询", "查一下", "接入", "读取", "记忆", "回忆", "记得", "记住",
+            "不对", "错了", "不是", "然后", "写一篇", "写个", "生成",
+        )
+        # Hermes 系统提示/内部指令 (英文): 命中即不写 (2026-08-14 修复 skill-review 污染)
+        _MEM_ENGLISH_HINTS = (
+            "review the conversation",
+            "skill library",
+            "update the skill",
+            "be active",
+            "most sessions",
+            "conversation above",
+            "task list",
+        )
+        _mem_lower = _mem_text.lower()
+        # 常见疑问句尾: 命中任一即不写
+        _MEM_QUESTION_TAILS = ("吗", "呢", "?", "？", "什么", "吗。", "了。", "了吗", "有没有")
+        should_mem = len(_mem_text) >= 6
+        if should_mem:
+            for h in _MEM_EXCLUDE_HINTS:
+                if h in _mem_text:
+                    should_mem = False
+                    break
+        if should_mem:
+            # 英文系统提示/内部指令 (大小写不敏感)
+            for h in _MEM_ENGLISH_HINTS:
+                if h in _mem_lower:
+                    should_mem = False
+                    break
+        if should_mem:
+            # 双重保险: 以疑问句尾收尾的短句 (如 "我电脑配置是什么") 不写
+            for t in _MEM_QUESTION_TAILS:
+                if _mem_text.rstrip("。！! ").endswith(t):
+                    should_mem = False
+                    break
+        if should_mem:
+            # 去重: 与现有记忆高度相似 (>0.85) 则不重复写
+            dup = False
+            try:
+                for r in sem.recall_memory(_mem_text, top_k=1) or []:
+                    if r.get("score", 0) >= 0.85:
+                        dup = True
+                        break
+            except Exception:
+                pass
+            if not dup:
+                sem.add_memory(
+                    _mem_text,
+                    meta={"source": "voice" if _mem_is_voice else "text", "auto": True},
+                )
+                logger.info("Auto-memory: %s (%s)", _mem_text[:40], "voice" if _mem_is_voice else "text")
+    except Exception as e:
+        logger.debug(f"Auto-memory skipped: {e}")
 
     # ── Step 2: RulesEngine ──
     try:
@@ -171,6 +332,14 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
             pass
     except Exception:
         pass
+
+    # ── Step 3.5: LLM 链尾兜底 (规则/模板均未命中时, 由真 LLM 生成) ──
+    try:
+        llm_result = _llm_tail_fallback(user_msg, psi_context)
+        if llm_result:
+            return llm_result
+    except Exception as e:
+        logger.debug(f"LLM tail fallback step failed: {e}")
 
     # ── Fallback ──
     state = CognitiveState()
@@ -563,6 +732,64 @@ async def handle_get_bond(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def handle_rsi_status(request):
+    """Get RSI (Recursive Self-Improvement) engine status."""
+    try:
+        sys.path.insert(0, str(BRAIN_DIR))
+        from laap.agi.rsi_engine import RSIMetaEngine
+        rsi = RSIMetaEngine()
+        return web.json_response({
+            "status": "ready",
+            "stats": rsi.stats(),
+            "parameters": [p.to_dict() for p in rsi.parameters.values()],
+            "active_goals": [g.to_dict() for g in rsi.get_active_goals()]
+        })
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_rsi_improve(request):
+    """Apply an RSI self-improvement."""
+    try:
+        body = await request.json()
+        parameter = body.get("parameter")
+        rationale = body.get("rationale", "")
+        sys.path.insert(0, str(BRAIN_DIR))
+        from laap.agi.rsi_engine import RSIMetaEngine
+        rsi = RSIMetaEngine()
+
+        if not parameter:
+            suggestions = rsi.suggest_improvements()
+            if suggestions:
+                parameter = suggestions[0]['parameter']
+                rationale = suggestions[0]['rationale']
+            else:
+                return web.json_response({"status": "no_suggestions", "message": "No improvements needed"})
+
+        attempt = rsi.apply_improvement(parameter, 0.5, rationale)
+        return web.json_response({
+            "status": "applied",
+            "parameter": attempt.target,
+            "old_value": round(attempt.old_value, 3),
+            "new_value": round(attempt.new_value, 3),
+            "rationale": attempt.rationale
+        })
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_rsi_full_cycle(request):
+    """Run a full RSI improvement cycle."""
+    try:
+        sys.path.insert(0, str(BRAIN_DIR))
+        from laap.agi.rsi_engine import RSIMetaEngine
+        rsi = RSIMetaEngine()
+        result = rsi.full_improvement_cycle()
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_root(request):
     return web.json_response({
         "name": "LAAP Brain API",
@@ -578,6 +805,9 @@ async def handle_root(request):
             "/v1/bootstrap": "Awaken a new LAAP instance",
             "/v1/personality": "GET/SET personality",
             "/v1/bond": "Get attachment/bond status",
+            "/v1/rsi_status": "RSI self-improvement status",
+            "/v1/rsi_improve": "Apply RSI improvement",
+            "/v1/rsi_full_cycle": "Run full RSI cycle",
             "/health": "Health check",
         },
         "frameworks": [
@@ -606,6 +836,9 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/personality", handle_get_personality)
     app.router.add_post("/v1/personality", handle_set_personality)
     app.router.add_get("/v1/bond", handle_get_bond)
+    app.router.add_post("/v1/rsi_status", handle_rsi_status)
+    app.router.add_post("/v1/rsi_improve", handle_rsi_improve)
+    app.router.add_post("/v1/rsi_full_cycle", handle_rsi_full_cycle)
     return app
 
 

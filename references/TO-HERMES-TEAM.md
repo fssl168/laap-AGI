@@ -56,7 +56,7 @@ If Hermes adopts this pattern in any form, it tells the world that there's a thi
 
 ## The Invitation
 
-LAAP is open source: [github.com/lorryjovens-hub/laap-AGI](https://github.com/lorryjovens-hub/laap-AGI)
+LAAP is open source: [github.com/fssl168/laap-AGI](https://github.com/fssl168/laap-AGI)
 
 To try it: `pip install aiohttp && python laap_brain_api.py` — 3 seconds to a running cognitive engine.
 

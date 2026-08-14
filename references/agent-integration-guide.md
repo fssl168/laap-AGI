@@ -15,7 +15,7 @@
 ### 1.2 安装 LAAP
 
 ```bash
-git clone https://github.com/lorryjovens-hub/laap-AGI.git
+git clone https://github.com/fssl168/laap-AGI.git
 cd laap-AGI
 pip install -e ".[dev]"
 ```

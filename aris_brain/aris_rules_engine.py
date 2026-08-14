@@ -42,6 +42,108 @@ class ToolRegistry:
         return list(self._tools.keys())
 
 
+# ─── 命令安全校验 ──────────────────────────────────────────
+# run_command / run_python 等会执行 shell 的工具, 必须在执行前经过此校验。
+# 原则: 默认拒绝 + 白名单放行 + 危险模式黑名单, 杜绝误触发/注入。
+
+# 允许执行的安全命令首 token (白名单)
+_ALLOWED_CMD_TOKENS = frozenset([
+    "ls", "cat", "pwd", "echo", "date", "whoami", "hostname", "uname",
+    "uptime", "df", "free", "ps", "top", "head", "tail", "wc", "grep",
+    "find", "tree", "du", "stat", "file", "type", "which",
+    "python", "python3", "pip", "pip3", "git", "curl", "wget",
+    "docker", "systemctl", "journalctl",
+    "nproc", "lscpu", "lsblk", "ifconfig", "ip", "ss", "netstat",
+    "ping", "nslookup", "dig",
+    "tar", "zip", "unzip", "gzip", "sed", "awk", "sort", "uniq", "cut",
+    "tr", "xargs", "make", "gcc", "g++", "cmake",
+    "node", "npm", "npx", "yarn", "pnpm",
+])
+
+# 免授权命令首 token: 常规开发/查询操作, 直接执行无需使用人确认。
+# 分级策略:
+#   - 危险命令 (命中 _DANGEROUS_CMD_PATTERNS)  → 硬拦截
+#   - 白名单 + 免授权 token (本集合)          → 直接执行
+#   - 白名单 + 其他 token (有副作用: 安装/构建/写文件/网络) → 需授权
+#   - 白名单外                                  → 拒绝
+_AUTO_EXEC_TOKENS = frozenset([
+    # 版本控制 (常规开发操作)
+    "git",
+    # 只读查询/查看
+    "ls", "cat", "pwd", "echo", "date", "whoami", "hostname", "uname",
+    "uptime", "df", "free", "ps", "top", "head", "tail", "wc", "grep",
+    "find", "tree", "du", "stat", "file", "type", "which",
+    "nproc", "lscpu", "lsblk", "ifconfig", "ip", "ss", "netstat",
+    "ping", "nslookup", "dig",
+    # 文本处理 (只读/纯文本变换)
+    "sort", "uniq", "cut", "tr", "awk",
+])
+
+# 危险模式 (正则, 命中即拒绝)
+# 注意: 删除/移动类 (rm/mv) 仅拦截"独立命令位置" (行首 或 ; && | 之后),
+#       不拦截 git rm / git mv 这类 git 子命令 (常规开发操作)。
+_CMD_BOUNDARY = r"(^|[;&|]\s*|&&\s*|\|\|\s*)"
+_DANGEROUS_CMD_PATTERNS = [
+    _CMD_BOUNDARY + r"rm\s+-[a-zA-Z]*[rf][a-zA-Z]*\b",  # rm -rf / rm -fr / rm -r
+    _CMD_BOUNDARY + r"rm\b",                            # 独立 rm (删除操作一律拒绝)
+    _CMD_BOUNDARY + r"mv\b",                            # 独立 mv (移动/覆盖文件)
+    _CMD_BOUNDARY + r"dd\b",                            # dd 磁盘级操作
+    _CMD_BOUNDARY + r"mkfs",                            # 格式化
+    _CMD_BOUNDARY + r"fdisk\b",                         # 分区
+    r"\bshutdown\b", r"\breboot\b", r"\bpoweroff\b", r"\bhalt\b", r"\binit\b",
+    _CMD_BOUNDARY + r"kill\b", _CMD_BOUNDARY + r"pkill\b", _CMD_BOUNDARY + r"killall\b",
+    _CMD_BOUNDARY + r"chmod\b", _CMD_BOUNDARY + r"chown\b", _CMD_BOUNDARY + r"chgrp\b",
+    _CMD_BOUNDARY + r"sudo\b", _CMD_BOUNDARY + r"su\b", r"\bpasswd\b",
+    _CMD_BOUNDARY + r"useradd\b", _CMD_BOUNDARY + r"userdel\b",
+    _CMD_BOUNDARY + r"groupadd\b", _CMD_BOUNDARY + r"groupdel\b",
+    _CMD_BOUNDARY + r"iptables\b", _CMD_BOUNDARY + r"nft\b", _CMD_BOUNDARY + r"ufw\b",
+    _CMD_BOUNDARY + r"mount\b", _CMD_BOUNDARY + r"umount\b",
+    _CMD_BOUNDARY + r"swapoff\b", _CMD_BOUNDARY + r"swapon\b",
+    _CMD_BOUNDARY + r"parted\b", _CMD_BOUNDARY + r"cryptsetup\b",
+    r"\bdocker\s+(rm|rmi|kill|stop|compose\s+down)\b",
+    r"\bsystemctl\s+(stop|disable|mask|reboot|poweroff)\b",
+    r"\bmake\s+install\b",
+    r":\(\)\s*\{",                          # fork bomb
+    r"\|\s*(sh|bash|zsh)\b",               # 管道进 shell
+    r">\s*/dev/sd",                          # 写裸盘
+    r"\bcurl\b[^|]*\|\s*(sh|bash)",        # curl | sh
+    r"\bwget\b[^|]*\|\s*(sh|bash)",        # wget | sh
+    r"(^|[;&|]\s*)\brm\s+-rf\s+/",          # 根目录删除 (兜底)
+    r"(^|\s)(/etc/shadow|/etc/gshadow|/etc/passwd|/etc/sudoers|/etc/ssh/|/root/|\.ssh/|\.aws/|\.gnupg/|id_rsa|id_ed25519|\.pem\b|\.key\b|credentials)",  # 系统敏感文件/密钥
+    # 代码执行上下文 (os.system / subprocess 等绕过检测的路径)
+    r"os\.system\s*\(",
+    r"os\.popen\s*\(",
+    r"subprocess\s*\.\s*(run|call|Popen|check_output|check_call)\s*\(",
+    r"eval\s*\(|exec\s*\(|__import__\s*\(",
+]
+
+
+def _validate_shell_cmd(cmd: str) -> tuple[bool, str]:
+    """校验 shell 命令是否安全。返回 (是否允许, 拒绝原因)。
+
+    规则:
+      1. 空命令 / 占位符残留 / 过长 → 拒绝
+      2. 危险模式 (删除/格式化/关机/提权/管道注入等) → 拒绝
+      3. 首 token 不在白名单 → 拒绝 (默认拒绝)
+    """
+    if not cmd or not cmd.strip():
+        return False, "空命令"
+    if "{" in cmd or "}" in cmd:
+        return False, "命令含未解析占位符"
+    if len(cmd) > 200:
+        return False, "命令过长 (>200字符)"
+    for pat in _DANGEROUS_CMD_PATTERNS:
+        if re.search(pat, cmd, re.IGNORECASE):
+            return False, f"命中危险模式: {pat}"
+    first = cmd.strip().split()[0].lower()
+    # 允许路径形式的命令 (如 ./script.sh) 仅限可执行文件且非危险脚本
+    if first not in _ALLOWED_CMD_TOKENS:
+        if first.startswith(("./", "../")) or first.endswith((".sh", ".py")):
+            return False, f"脚本执行需显式白名单: {first}"
+        return False, f"命令不在白名单: {first}"
+    return True, ""
+
+
 # ─── 规则定义 ────────────────────────────────────────────
 
 @dataclass
@@ -85,9 +187,15 @@ class Rule:
 class RulesEngine:
     """规则引擎 — 匹配输入→执行步骤→输出结果。"""
 
+    # 命令执行需经使用人授权 (pending 状态, 120 秒有效)
+    AUTH_TIMEOUT_SECONDS = 120
+    CONFIRM_WORDS = ("确认", "同意", "执行", "可以", "好的", "是", "yes", "ok", "y", "确认执行", "同意执行", "批准")
+    REJECT_WORDS = ("取消", "不要", "算了", "拒绝", "不执行", "停止", "no", "n", "不用", "别")
+
     def __init__(self):
         self.rules: List[Rule] = []
         self.tools = ToolRegistry()
+        self._pending_cmd: Optional[Dict[str, Any]] = None  # {cmd, ts}
         self._register_default_tools()
         self._register_default_rules()
 
@@ -96,7 +204,11 @@ class RulesEngine:
         import subprocess
 
         def tool_terminal(cmd: str, timeout: int = 30, workdir: str = None) -> str:
-            """执行shell命令。"""
+            """执行shell命令 (安全守卫版: 白名单+危险模式拦截)。"""
+            # 安全守卫: 任何命令执行前必过校验
+            ok, reason = _validate_shell_cmd(cmd)
+            if not ok:
+                return f"[安全拦截] 命令未执行: {reason}"
             try:
                 r = subprocess.run(
                     cmd, shell=True, capture_output=True, text=True,
@@ -524,8 +636,22 @@ except Exception as e:
                 return f"[比较失败] {e}"
 
         def tool_run_python(code: str) -> str:
-            """在受限子进程中运行一段 Python 代码。"""
+            """在受限子进程中运行一段 Python 代码 (安全拦截危险代码)。"""
             import subprocess as _sp, sys as _sys, tempfile as _tf
+            # 安全拦截: 危险代码模式 (os.system/subprocess 任意命令/删除/网络下载执行)
+            _danger_code = [
+                "os.system(", "os.popen(", "subprocess.run", "subprocess.call",
+                "subprocess.Popen", "subprocess.check_output",
+                "shutil.rmtree", "os.remove(", "os.unlink(",
+                "pathlib.Path.unlink", "import sys; sys.exit",
+                "eval(", "exec(", "__import__('os')",
+                "requests.get", "urllib.request.urlopen",
+                "socket.", "socket.socket",
+            ]
+            _code_lower = code.lower()
+            for _pat in _danger_code:
+                if _pat.lower() in _code_lower:
+                    return f"[安全拦截] 代码含危险操作: {_pat}"
             try:
                 with _tf.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as f:
                     f.write(code)
@@ -729,9 +855,16 @@ except Exception as e:
             ),
             Rule(
                 name="run_command",
-                patterns=["运行", "执行", "启动", "编译", "构建", "run", "execute", "start", "build"],
+                # 收窄触发词: 移除宽泛的"启动/编译/构建/start/build" (易误触发),
+                # 仅保留明确命令意图表达。
+                patterns=[
+                    "运行命令", "执行命令", "帮我运行", "帮我执行", "请运行", "请执行",
+                    "运行以下", "执行以下", "运行这个", "执行这个",
+                    "run command", "run the command", "execute command",
+                    "运行 ", "执行 ", "run ", "execute ",
+                ],
                 intent="run_command",
-                description="执行shell命令",
+                description="执行shell命令 (经安全校验)",
                 steps=[
                     RuleStep(tool="terminal", params={"cmd": "{cmd}"}, output_key="output"),
                 ],
@@ -739,7 +872,7 @@ except Exception as e:
             ),
             Rule(
                 name="remember_fact_rule",
-                patterns=["记住", "记下来", "别忘了", "记住我说", "记得我", "save memory"],
+                patterns=["记住", "记下来", "别忘了", "记住我说", "save memory"],
                 intent="remember_fact",
                 description="把事实保存到语义记忆",
                 steps=[
@@ -749,7 +882,7 @@ except Exception as e:
             ),
             Rule(
                 name="recall_fact_rule",
-                patterns=["回忆", "记得", "想起", "我之前说过", "我以前说", "recall memory"],
+                patterns=["回忆", "记得", "想起", "我之前说过", "我以前说", "recall memory", "记得我说", "我说过什么", "说了什么", "记得我", "还记得", "查询一下记忆", "查一下记忆", "记忆中", "读取记忆", "记忆里", "从记忆"],
                 intent="recall_fact",
                 description="从语义记忆召回相关事实",
                 steps=[
@@ -885,11 +1018,17 @@ except Exception as e:
         if path_match:
             intent["params"]["path"] = path_match.group()
         
-        # 提取命令参数 (在"运行"/"执行"/"run"之后的内容)
-        for prefix in ["运行", "执行", "启动", "run", "execute"]:
+        # 提取命令参数 (在"运行"/"执行"/"run"之后的内容), 需通过安全校验
+        for prefix in ["运行", "执行", "run", "execute"]:
             if prefix in text:
                 idx = text.index(prefix) + len(prefix)
-                intent["params"]["cmd"] = text[idx:].strip()[:100]
+                raw_cmd = text[idx:].strip()[:100]
+                ok, reject_reason = _validate_shell_cmd(raw_cmd)
+                if ok:
+                    intent["params"]["cmd"] = raw_cmd
+                else:
+                    # 记录拒绝原因, 用于向使用人明确说明
+                    intent["params"]["cmd_rejected"] = reject_reason
                 break
         
         # 提取搜索查询
@@ -899,11 +1038,52 @@ except Exception as e:
                 intent["params"]["query"] = text[idx:].strip()[:50]
                 break
         
+        # 回忆类问题也提取 query (整句作查询词, 语义检索需要完整上下文)
+        # 注意: 与搜索前缀不同, 回忆类提取的是整句去掉套话后的线索,
+        #       保证 "你记得我刚才语音里说了什么吗?关于测试的" 能命中"测试"记忆。
+        _RECALL_PREFIXES = ("我记得我", "记得我说", "我说过什么", "我之前说过", "我以前说",
+                            "说了什么", "我刚才说", "回忆", "想起", "还记得", "记得我",
+                            "查询一下记忆中", "查询一下记忆", "查一下记忆中", "查一下记忆",
+                            "读取记忆里", "读取记忆中", "读取记忆", "记忆中", "记忆里",
+                            "从记忆里", "从记忆中", "从记忆")
+        _RECALL_JUNK = ("吗？", "吗?", "吗", "呢", "什么", "哪些", "哪句话", "哪",
+                        "？", "?", "一下", "再", "还", "过", "的事情", "的事", "然后")
+        if "query" not in intent.get("params", {}):
+            for prefix in _RECALL_PREFIXES:
+                if prefix in text:
+                    idx = text.index(prefix) + len(prefix)
+                    rest = text[idx:].strip()
+                    # 口语填充/疑问词清理 (前缀切点后, 疑问词可能在开头或结尾)
+                    for junk in _RECALL_JUNK:
+                        if rest.startswith(junk):
+                            rest = rest[len(junk):].strip()
+                            break
+                    for junk in _RECALL_JUNK:
+                        if rest.endswith(junk):
+                            rest = rest[: -len(junk)].strip()
+                            break
+                    # 清理后无实质内容 → 用整句, 让语义检索自己找
+                    intent["params"]["query"] = (rest[:100] if len(rest) >= 2
+                                                 else text.strip()[:100])
+                    break
+            else:
+                # 命中 recall_fact_rule 但没有任何前缀时 (如 "你记得...吗"),
+                # 在 process() 中用整句兜底 (已有逻辑 1354 行附近)
+                pass
+        
         # 提取要记住的事实
+        # 注意: 疑问句 (含 什么/哪些/有没有/是不是/吗?) 中的"记住"是回忆查询,
+        #       不应提取为要写入的事实 (否则"我刚才让你记住的那句话是什么?"
+        #       会被误存为记忆 → 记忆断层)。
+        _RECALL_QUESTION_HINTS = ("什么", "哪些", "有没有", "是不是", "吗", "？", "?", "哪句话", "说了什么")
         for prefix in ["记住", "记下来", "别忘了", "记住我说"]:
             if prefix in text:
                 idx = text.index(prefix) + len(prefix)
-                intent["params"]["fact"] = text[idx:].strip()[:500]
+                rest = text[idx:].strip()
+                # 疑问句 → 是回忆请求, 不提取 fact (交给 recall_fact_rule)
+                if any(h in rest for h in _RECALL_QUESTION_HINTS):
+                    break
+                intent["params"]["fact"] = rest[:500]
                 break
         
         # 提取计划目标
@@ -1021,26 +1201,219 @@ except Exception as e:
                 parts.append(f"[{k}]\n{v}")
         return "\n\n".join(parts) if parts else "[无输出]"
 
+    # ─── 命令授权 ────────────────────────────────────────
+
+    def _check_auth_expired(self) -> bool:
+        """pending 授权是否已过期。过期则清除并返回 True。"""
+        if self._pending_cmd is None:
+            return False
+        age = time.time() - self._pending_cmd.get("ts", 0)
+        if age > self.AUTH_TIMEOUT_SECONDS:
+            self._pending_cmd = None
+            return True
+        return False
+
+    def _handle_pending(self, text: str) -> Optional[Dict[str, Any]]:
+        """有待授权命令时, 处理用户确认/拒绝。返回处理结果或 None(非确认/拒绝)。"""
+        if self._pending_cmd is None:
+            return None
+        if self._check_auth_expired():
+            return {
+                "matched": True,
+                "rule": "run_command",
+                "intent": "run_command",
+                "confidence": 0.0,
+                "output": "[授权已过期] 命令未执行, 请重新发起命令请求。",
+                "latency_ms": 0,
+            }
+        t = text.strip().lower().strip("，。！？!? .,;；")
+        cmd = self._pending_cmd.get("cmd", "")
+        # 确认: 单独确认词, 或以确认词开头
+        for w in self.CONFIRM_WORDS:
+            if t == w or t.startswith(w):
+                self._pending_cmd = None
+                # 确认执行前再次过安全校验 (纵深防御: 即使 pending 被污染也拦截)
+                ok, reason = _validate_shell_cmd(cmd)
+                if not ok:
+                    return {
+                        "matched": True,
+                        "rule": "run_command",
+                        "intent": "run_command",
+                        "confidence": 0.0,
+                        "output": f"[安全拦截] 命令未执行: {reason}",
+                        "latency_ms": 0,
+                    }
+                try:
+                    tool = self.tools.get("terminal")
+                    out = tool(cmd=cmd)
+                except Exception as e:
+                    out = f"[执行失败] {e}"
+                return {
+                    "matched": True,
+                    "rule": "run_command",
+                    "intent": "run_command",
+                    "confidence": 0.0,
+                    "output": f"✓ 已获得授权, 执行命令: {cmd}\n{out}",
+                    "latency_ms": 0,
+                }
+        # 拒绝
+        for w in self.REJECT_WORDS:
+            if t == w or t.startswith(w):
+                self._pending_cmd = None
+                return {
+                    "matched": True,
+                    "rule": "run_command",
+                    "intent": "run_command",
+                    "confidence": 0.0,
+                    "output": f"[已取消] 命令未执行: {cmd}",
+                    "latency_ms": 0,
+                }
+        # 其他内容 → 仍在等待授权
+        return {
+            "matched": True,
+            "rule": "run_command",
+            "intent": "run_command",
+            "confidence": 0.0,
+            "output": (
+                f"[待授权] 有一命令等待你的确认: `{cmd}`\n"
+                f"回复「确认」执行, 或「取消」放弃 (有效期 {self.AUTH_TIMEOUT_SECONDS} 秒)。"
+            ),
+            "latency_ms": 0,
+        }
+
+    def _handle_command(
+        self,
+        cmd: str,
+        intent: Dict[str, Any],
+        t0: float,
+        rule: Optional["Rule"] = None,
+        score: float = 0.0,
+    ) -> Dict[str, Any]:
+        """命令分级处理:
+        1. 危险命令 (命中 _DANGEROUS_CMD_PATTERNS)  → 硬拦截
+        2. 白名单 + 免授权 token (git/查询/只读)   → 直接执行
+        3. 白名单 + 其他 token (安装/构建/写/网络)  → 需授权确认
+        4. 白名单外                                  → 拒绝
+        """
+        rule_name = rule.name if rule else "run_command"
+        rule_intent = rule.intent if rule else "run_command"
+
+        ok, reason = _validate_shell_cmd(cmd)
+        if not ok:
+            return {
+                "matched": True,
+                "rule": rule_name,
+                "intent": rule_intent,
+                "confidence": round(score, 3),
+                "output": f"[安全拦截] 命令未执行: {reason}",
+                "latency_ms": round((time.time() - t0) * 1000, 1),
+            }
+
+        first = cmd.strip().split()[0].lower()
+
+        # 免授权命令: 常规开发/查询操作, 直接执行
+        if first in _AUTO_EXEC_TOKENS:
+            try:
+                tool = self.tools.get("terminal")
+                out = tool(cmd=cmd)
+            except Exception as e:
+                out = f"[执行失败] {e}"
+            return {
+                "matched": True,
+                "rule": rule_name,
+                "intent": rule_intent,
+                "confidence": round(score, 3),
+                "output": f"✓ 执行: {cmd}\n{out}",
+                "latency_ms": round((time.time() - t0) * 1000, 1),
+            }
+
+        # 有副作用命令: 进入待授权
+        self._pending_cmd = {"cmd": cmd, "ts": time.time()}
+        return {
+            "matched": True,
+            "rule": rule_name,
+            "intent": rule_intent,
+            "confidence": round(score, 3),
+            "output": (
+                f"[需要授权] 你请求执行命令: `{cmd}`\n"
+                f"⚠️ 命令将在我确认后执行。回复「确认」授权, 或「取消」拒绝。"
+            ),
+            "latency_ms": round((time.time() - t0) * 1000, 1),
+        }
+
     # ─── 一站式入口 ──────────────────────────────────────
 
     def process(self, text: str) -> Dict[str, Any]:
-        """处理一条输入：意图提取→规则匹配→执行→输出。"""
+        """处理一条输入：意图提取→规则匹配→执行→输出。
+
+        安全策略: 命令类规则 (run_command) 不直接执行,
+        先进入待授权状态, 经使用人确认后才执行。
+        """
         t0 = time.time()
-        
+
+        # 待授权命令优先处理 (确认/拒绝/等待)
+        pending_result = self._handle_pending(text)
+        if pending_result is not None:
+            return pending_result
+
         intent = self.extract_intent(text)
+
+        # 命令意图优先: 若提取到有效命令, 直接走命令流程 (避免被其他规则抢走,
+        # 如 "运行 git status" 不应被 query_status 规则截胡)
+        cmd = intent.get("params", {}).get("cmd", "")
+        if cmd:
+            return self._handle_command(cmd, intent, t0)
+
         match_result = self.match(text)
-        
+
         if match_result is None:
             return {
                 "matched": False,
                 "output": f"[未匹配到规则] 输入: {text[:60]}",
                 "latency_ms": round((time.time() - t0) * 1000, 1),
             }
-        
+
         rule, score = match_result
+
+        # 记忆写入误判防护: 命中 remember_fact_rule 但 fact 为空 (疑问句回忆请求)
+        # 时, 重定向到 recall_fact_rule — 防止"我刚才让你记住的那句话是什么?"
+        # 被当作写入指令 (记忆断层根因之一)。
+        if rule.name == "remember_fact_rule" and not intent.get("params", {}).get("fact", ""):
+            recall_rule = next((r for r in self.rules if r.name == "recall_fact_rule"), None)
+            if recall_rule is not None:
+                rule = recall_rule
+                score = rule.match_score(text)
+                # 用整条输入作为回忆查询词 (疑问句的"记住"位置之前的内容才是线索)
+                intent.setdefault("params", {})["query"] = text.strip()[:100]
+
+        # 命令类规则: 分级处理 (免授权直接执行 / 需授权等待确认)
+        if rule.name == "run_command":
+            params = intent.get("params", {})
+            cmd = params.get("cmd", "")
+            reject_reason = params.get("cmd_rejected", "")
+            if reject_reason:
+                return {
+                    "matched": True,
+                    "rule": rule.name,
+                    "intent": rule.intent,
+                    "confidence": round(score, 3),
+                    "output": f"[安全拦截] 命令未执行: {reject_reason}",
+                    "latency_ms": round((time.time() - t0) * 1000, 1),
+                }
+            if not cmd:
+                return {
+                    "matched": True,
+                    "rule": rule.name,
+                    "intent": rule.intent,
+                    "confidence": round(score, 3),
+                    "output": "[无法执行] 未能从输入中解析出有效命令 (命令需通过安全校验)。",
+                    "latency_ms": round((time.time() - t0) * 1000, 1),
+                }
+            return self._handle_command(cmd, intent, t0, rule, score)
+
         context = self.execute(rule, intent)
         output = self.render(rule, context)
-        
+
         return {
             "matched": True,
             "rule": rule.name,
