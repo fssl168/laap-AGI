@@ -40,17 +40,21 @@ class QuantScopeGuard:
 class QuantEvolutionGate:
     """交易适应度 OOS 门禁（deploy_gate 协议）。
 
-    对 paper_trading 下的代码变更，跑 baseline 样本外回测（train vs oos），
-    OOS 不劣化才放行 —— 防"过拟合自我强化"：系统已在 OOS 上劣化时，
-    拒绝进一步代码级进化（fail-closed）。
-
-    说明: 完整实现应做"mutation 前后 OOS 对比"（需策略参数提取器）；最小闭环
-    先做 baseline OOS 健康门禁，策略参数提取作为后续增强。
+    增强 3 后分两种：
+      - 目标是 strategy.py → 从 mutated_code AST 提取参数，做 mutation 前后 OOS 对比
+        （mutated OOS 不劣于 baseline OOS 才放行）。
+      - 其他 paper_trading 代码 → baseline OOS 健康门禁（系统 OOS 不劣化才放行）。
+    均 fail-closed：不满足即拒绝。
     """
 
-    def __init__(self, runner: BacktestRunner, price_series: List[float]):
+    def __init__(self, runner: BacktestRunner, price_series: List[float],
+                 baseline_params: Optional[Dict[str, Any]] = None):
         self.runner = runner
         self.price_series = price_series
+        if baseline_params is None:
+            from laap.paper_trading.param_extractor import load_baseline_params
+            baseline_params = load_baseline_params()
+        self.baseline_params = baseline_params
 
     def __call__(self, mutation: Any, engine: Any) -> Tuple[bool, str]:
         target = (getattr(getattr(mutation, "target", None), "file_path", "") or "")
@@ -64,13 +68,46 @@ class QuantEvolutionGate:
         dates = list(range(n))
         train, valid, oos = split_series(dates)
         oos_start = len(train) + len(valid)
-        train_metrics = self.runner.run_backtest(self.price_series, split=(0, len(train)))
-        oos_metrics = self.runner.run_backtest(self.price_series, split=(oos_start, n))
+
+        # 策略参数文件 → mutation 前后 OOS 对比（增强 3）
+        if target.endswith("strategy.py"):
+            from laap.paper_trading.param_extractor import extract_strategy_params
+            mutated_params = extract_strategy_params(mutation.mutated_code)
+            if not mutated_params:
+                return False, "strategy.py mutation: cannot extract STRATEGY_PARAMS"
+            return self._compare_params(mutated_params, oos_start, n)
+
+        # 其他业务代码 → baseline OOS 健康门禁
+        train_metrics = self.runner.run_backtest(
+            self.price_series, params=self.baseline_params, split=(0, len(train)))
+        oos_metrics = self.runner.run_backtest(
+            self.price_series, params=self.baseline_params, split=(oos_start, n))
         ok, reason = self.runner.oos_gate(train_metrics, oos_metrics)
         if not ok:
             return False, f"OOS gate blocked: {reason}"
         return True, (f"OOS not degraded (train_sharpe={train_metrics['sharpe_ratio']}, "
                       f"oos_sharpe={oos_metrics['sharpe_ratio']})")
+
+    def _compare_params(self, mutated_params: Dict[str, Any],
+                        oos_start: int, n: int) -> Tuple[bool, str]:
+        """mutation 前后 OOS 对比：mutated OOS 不劣于 baseline OOS 才放行。"""
+        try:
+            base_oos = self.runner.run_backtest(
+                self.price_series, params=self.baseline_params, split=(oos_start, n))
+            mut_oos = self.runner.run_backtest(
+                self.price_series, params=mutated_params, split=(oos_start, n))
+        except Exception as e:
+            return False, f"mutated params backtest failed: {e}"
+
+        if mut_oos["cumulative_return"] < base_oos["cumulative_return"]:
+            return False, (f"mutated OOS cumulative_return "
+                           f"{mut_oos['cumulative_return']:.2%} < baseline "
+                           f"{base_oos['cumulative_return']:.2%}")
+        if mut_oos["sharpe_ratio"] < base_oos["sharpe_ratio"]:
+            return False, (f"mutated OOS sharpe {mut_oos['sharpe_ratio']:.3f} < "
+                           f"baseline {base_oos['sharpe_ratio']:.3f}")
+        return True, (f"mutated OOS not degraded (cumret={mut_oos['cumulative_return']:.2%}, "
+                      f"sharpe={mut_oos['sharpe_ratio']:.3f})")
 
 
 class QuantEvolutionEngine:

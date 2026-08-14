@@ -25,7 +25,7 @@ from laap.paper_trading.models import (
 @pytest.fixture()
 def ledger(tmp_path):
     db = PaperDB(db_path=str(tmp_path / "paper_trading.db"))
-    return PaperLedger(db, initial_cash=100_000.0)
+    return PaperLedger(db, initial_cash=100_000.0, enforce_t1=False)
 
 
 def _buy_signal(symbol="600519", qty=100, price=1355.0) -> PaperSignal:
@@ -105,12 +105,12 @@ def test_snapshot_net_value(ledger):
 def test_restore_cash_from_net_value(tmp_path):
     """重启后 cash 从最新净值恢复。"""
     db = PaperDB(db_path=str(tmp_path / "paper_trading.db"))
-    l1 = PaperLedger(db, initial_cash=100_000.0)
+    l1 = PaperLedger(db, initial_cash=100_000.0, enforce_t1=False)
     order = l1.submit_signal(_buy_signal(qty=100, price=100.0))
     l1.fill_order(order.id, fill_price=100.0)
     l1.snapshot_net_value(StubMarketSource(base_prices={"600519": 100.0}))
     cash_after = l1.cash
 
     # 重新打开同一 db
-    l2 = PaperLedger(db, initial_cash=100_000.0)
+    l2 = PaperLedger(db, initial_cash=100_000.0, enforce_t1=False)
     assert l2.cash == cash_after

@@ -27,7 +27,7 @@ def test_memory_closed_loop_e2e(tmp_path):
     db = PaperDB(db_path=str(tmp_path / "pt.db"))
     market = StubMarketSource(base_prices={"600519": 100.0})
     memory = UnifiedMemory()
-    loop = PaperClosedLoop(db, market, memory, initial_cash=1_000_000.0)
+    loop = PaperClosedLoop(db, market, memory, initial_cash=1_000_000.0, enforce_t1=False)
 
     # 第 1 天：决策买入 → 下单（注入记忆）→ 成交
     r1 = loop.decide_and_trade(

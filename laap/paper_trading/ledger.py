@@ -27,9 +27,12 @@ logger = logging.getLogger("laap.paper_trading.ledger")
 class PaperLedger:
     """最小订单管理系统（OMS）。"""
 
-    def __init__(self, db: PaperDB, initial_cash: float = 1_000_000.0):
+    def __init__(self, db: PaperDB, initial_cash: float = 1_000_000.0,
+                 enforce_t1: bool = True):
         self.db = db
         self.initial_cash = initial_cash
+        # T+1 锁仓（A股）：当日买入不可当日平仓
+        self.enforce_t1 = enforce_t1
         # 现金从最新净值恢复，否则用初始资金
         self.cash = self._restore_cash() if self._latest_net_value() else initial_cash
 
@@ -148,8 +151,13 @@ class PaperLedger:
             conn.close()
         return PaperOrder(id=order_id, status=OrderStatus.CANCELED)
 
-    def close_trade(self, trade_id: str, exit_price: float) -> PaperTrade:
-        """平仓：算 pnl / pnl_pct / hold_days，卖出现金回笼。"""
+    def close_trade(self, trade_id: str, exit_price: float,
+                    bypass_t1: bool = False) -> PaperTrade:
+        """平仓：算 pnl / pnl_pct / hold_days，卖出现金回笼。
+
+        T+1 锁仓：enforce_t1 时，当日买入（entry 与 exit 同自然日）不可平仓；
+        bypass_t1=True 跳过（测试/降级用）。
+        """
         conn = self.db.conn()
         try:
             row = conn.execute("SELECT * FROM trades WHERE id=?", (trade_id,)).fetchone()
@@ -159,6 +167,12 @@ class PaperLedger:
                 raise ValueError(f"trade already closed: {trade_id}")
 
             now = time.time()
+            # T+1 锁仓检查（A股：当日买入不可当日平仓）
+            if self.enforce_t1 and not bypass_t1:
+                if self._same_day(row["entry_ts"], now):
+                    raise ValueError(
+                        f"T+1 锁仓: 当日买入不可平仓 (trade={trade_id})")
+
             entry = row["entry_price"]
             qty = row["quantity"]
             pnl = (exit_price - entry) * qty
@@ -275,3 +289,15 @@ class PaperLedger:
     def _restore_cash(self) -> float:
         nv = self._latest_net_value()
         return nv.cash if nv else self.initial_cash
+
+    @staticmethod
+    def _same_day(ts1: float, ts2: float) -> bool:
+        """判断两个时间戳是否同自然日（T+1 锁仓用）。"""
+        return time.strftime("%Y-%m-%d", time.localtime(ts1)) == \
+               time.strftime("%Y-%m-%d", time.localtime(ts2))
+
+    def t1_locked_positions(self) -> List[PaperTrade]:
+        """当日买入的持仓（T+1 锁仓，不可卖）。"""
+        now = time.time()
+        return [p for p in self.open_positions()
+                if self._same_day(p.entry_ts, now)]

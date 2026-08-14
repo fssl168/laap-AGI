@@ -29,7 +29,7 @@ def db(tmp_path):
 
 @pytest.fixture()
 def ledger(db):
-    return PaperLedger(db, initial_cash=100_000.0)
+    return PaperLedger(db, initial_cash=100_000.0, enforce_t1=False)
 
 
 @pytest.fixture()

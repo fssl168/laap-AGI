@@ -1035,12 +1035,12 @@ def _get_quant_engine() -> Optional[Any]:
     try:
         from laap.paper_trading.quant_evolution import QuantEvolutionEngine
         from laap.paper_trading.backtest_runner import BacktestRunner
+        from laap.paper_trading.kline_source import load_price_series
         engine = _get_code_evolution_engine()
         if engine is None:
             return None
-        # OOS 门禁基线价格序列（合成趋势+噪声；真实历史 K 线接入是后续增强）
-        n = 120
-        price_series = [100.0 + i * 0.5 + ((i * 7) % 11 - 5) * 0.3 for i in range(n)]
+        # OOS 门禁基线：真实历史 K 线优先（增强 1），失败降级合成序列
+        price_series = load_price_series(symbol="600519", days=120)
         runner = BacktestRunner()
         db = _get_quant_db()
         _quant_engine = QuantEvolutionEngine(

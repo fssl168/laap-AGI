@@ -28,11 +28,11 @@ class PaperClosedLoop:
     """记忆 × 交易闭环装配（统一入口）。"""
 
     def __init__(self, db: PaperDB, market: MarketSource, memory: Any,
-                 initial_cash: float = 1_000_000.0):
+                 initial_cash: float = 1_000_000.0, enforce_t1: bool = True):
         self.db = db
         self.market = market
         self.memory = memory
-        self.ledger = PaperLedger(db, initial_cash=initial_cash)
+        self.ledger = PaperLedger(db, initial_cash=initial_cash, enforce_t1=enforce_t1)
         self.settlement = Settlement()
 
     def decide_and_trade(self, symbol: str, action: DecisionAction,
