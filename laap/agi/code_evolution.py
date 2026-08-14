@@ -992,6 +992,9 @@ class CodeEvolutionEngine:
         # M4 True RSI: 作用域守卫钩子 (None = 不启用, M1-M3 行为完全不变)
         # TrueRSIEngine 构造时注入; 每次 _improve_single 前对 target 做判定。
         self.scope_guard: Optional[Callable[[CodeTarget, int], Tuple[bool, str]]] = None
+        # 闭环 B: 部署门禁钩子 (None = 不启用)。test_passed 之后、deploy 之前调用，
+        # QuantEvolutionGate 注入交易适应度 OOS 门禁; 默认 None 时 M1-M4 行为不变。
+        self.deploy_gate: Optional[Callable[[CodeMutation, Any], Tuple[bool, str]]] = None
 
     def scan_targets(self, directory: str = "") -> List[CodeTarget]:
         """Scan for code improvement targets."""
@@ -1146,6 +1149,25 @@ class CodeEvolutionEngine:
                 if self.audit is not None:
                     try:
                         self.audit.record(mutation, "rejected", "qa_blocked")
+                    except Exception:
+                        pass
+                return result
+
+        # 闭环 B: 部署门禁 (交易适应度 OOS 门禁, 默认 None)
+        # QuantEvolutionGate 注入; 缺失/None 时跳过, M1-M4 行为不变。
+        _dgate = getattr(self, "deploy_gate", None)
+        if _dgate is not None:
+            try:
+                ok, reason = _dgate(mutation, self)
+            except Exception as e:  # 门禁异常 fail-closed
+                ok, reason = False, f"deploy_gate error: {e}"
+            if not ok:
+                mutation.status = MutationStatus.REJECTED
+                result["status"] = "gate_blocked"
+                result["reason"] = reason
+                if self.audit is not None:
+                    try:
+                        self.audit.record(mutation, "rejected", f"gate_blocked: {reason}")
                     except Exception:
                         pass
                 return result
