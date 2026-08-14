@@ -38,7 +38,7 @@ services:
 
     # API 端口（OpenAI 兼容）
     ports:
-      - "127.0.0.1:11546:11546"   //这样处理是适应避免VPS的端口被利用
+      - "127.0.0.1:11546:11546"
 
     # 持久化状态（记忆、情绪、认知状态）
     volumes:
@@ -90,10 +90,10 @@ services:
     command: ["python", "/app/mcp_server/laap_mcp_server.py", "--port", "11547"]
 
     ports:
-      - "127.0.0.1:11546:11546"      //这样处理是适应避免VPS的端口被利用
+      - "127.0.0.1:11547:11547"
 
     environment:
-      - LAAP_API_BASE=http://laap-mcp:11547
+      - LAAP_API_BASE=http://aris:11546
 
     volumes:
       - ./mcp_server/laap_mcp_server.py:/app/mcp_server/laap_mcp_server.py:ro
@@ -109,7 +109,7 @@ services:
       - laap-aris
 
     networks:
-      - hermes-net // 这里要跟随hermes agent的网络，需要自定义
+      - hermes-net
 # ── 持久化卷 ──────────────────────────────────────────────
 volumes:
   aris-state:
@@ -118,5 +118,6 @@ volumes:
     name: laap-aris-memory
     
 networks:
-  hermes-net:  // 这里要跟随hermes agent的网络，需要自定义
-    external: true
+  hermes-net:
+    # compose 自建网络 (不再依赖外部预建 external 网络)
+    driver: bridge
