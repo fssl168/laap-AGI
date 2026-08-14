@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from enum import Enum
 import time, logging, json, os, sys, ast, hashlib, difflib, subprocess, tempfile, shutil, re, threading, shlex
 from laap.rust_bridge import get_bridge
@@ -989,6 +989,10 @@ class CodeEvolutionEngine:
 
         self._lock = threading.Lock()
 
+        # M4 True RSI: 作用域守卫钩子 (None = 不启用, M1-M3 行为完全不变)
+        # TrueRSIEngine 构造时注入; 每次 _improve_single 前对 target 做判定。
+        self.scope_guard: Optional[Callable[[CodeTarget, int], Tuple[bool, str]]] = None
+
     def scan_targets(self, directory: str = "") -> List[CodeTarget]:
         """Scan for code improvement targets."""
         targets = self.analyzer.scan_directory(directory or "laap/agi/")
@@ -998,7 +1002,8 @@ class CodeEvolutionEngine:
     def auto_improve(self, directory: str = "",
                      max_mutations: int = 5,
                      auto_deploy: bool = False,
-                     test_commands: List[str] = None) -> List[Dict[str, Any]]:
+                     test_commands: List[str] = None,
+                     depth: int = 0) -> List[Dict[str, Any]]:
         """
         Full auto-improvement cycle.
 
@@ -1026,7 +1031,7 @@ class CodeEvolutionEngine:
             if attempted >= max_mutations:
                 break
             with self._lock:
-                result = self._improve_single(target, test_commands, auto_deploy)
+                result = self._improve_single(target, test_commands, auto_deploy, depth)
                 results.append(result)
                 if result.get("status") not in ("rejected",):
                     attempted += 1
@@ -1039,7 +1044,8 @@ class CodeEvolutionEngine:
 
     def _improve_single(self, target: CodeTarget,
                         test_commands: List[str],
-                        auto_deploy: bool) -> Dict[str, Any]:
+                        auto_deploy: bool,
+                        depth: int = 0) -> Dict[str, Any]:
         """Run full improvement cycle on a single target."""
         result = {
             "target": f"{target.file_path}:{target.function_name}",
@@ -1057,6 +1063,26 @@ class CodeEvolutionEngine:
                     return result
             except Exception:
                 pass
+
+        # M4 True RSI: 作用域守卫 (受限递归 + 永久只读 + 作用域限定)
+        # TrueRSIEngine 注入时启用; 缺失/None 时本段完全跳过, M1-M3 行为不变。
+        _guard = getattr(self, "scope_guard", None)
+        if _guard is not None:
+            try:
+                ok, reason = _guard(target, depth)
+            except Exception as e:  # 守卫异常按"拒绝"处理 (fail-closed)
+                ok, reason = False, f"scope_guard error: {e}"
+            if not ok:
+                result["status"] = "rejected"
+                result["reason"] = f"M4 scope: {reason}"
+                if self.audit is not None:
+                    try:
+                        self.audit.record(
+                            {"id": "", "status": "", "target": target.file_path},
+                            "rejected", f"M4 scope: {reason}")
+                    except Exception:
+                        pass
+                return result
 
         # Step 2: Generate patch
         mutation = self.patcher.generate_patch(target)
