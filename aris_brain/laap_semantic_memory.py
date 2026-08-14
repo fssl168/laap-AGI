@@ -69,7 +69,11 @@ class SentenceTransformersProvider(EmbeddingProvider):
         os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
         
         self.model = SentenceTransformer(model_name)
-        self.dim = self.model.get_sentence_embedding_dimension()
+        # 兼容新旧 sentence-transformers: get_embedding_dimension 为现行 API, 旧版用 get_sentence_embedding_dimension
+        _dim_getter = getattr(self.model, "get_embedding_dimension", None)
+        if _dim_getter is None:
+            _dim_getter = self.model.get_sentence_embedding_dimension
+        self.dim = _dim_getter()
 
     def embed(self, texts: List[str], fit: bool = False) -> List[List[float]]:
         embeddings = self.model.encode(texts, convert_to_numpy=True)

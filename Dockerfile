@@ -53,9 +53,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 USER aris
 
 # 环境变量默认值
+# LAAP_HOST=0.0.0.0: 容器内监听全接口 (docker 端口映射需要); 主机侧暴露仍由
+# docker compose 的 "127.0.0.1:11546:11546" 映射限制, 不会直接暴露到局域网
 ENV LAAP_PORT=11546 \
     LAAP_API_BASE=http://localhost:11546 \
     LAAP_STATE_DIR=/app/aris_brain/state \
+    LAAP_HOST=0.0.0.0 \
     PYTHONUNBUFFERED=1
 
 EXPOSE 11546

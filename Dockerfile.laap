@@ -44,9 +44,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 USER aris
 
+# LAAP_HOST=0.0.0.0: 容器内监听全接口 (docker 端口映射需要); 主机侧暴露由端口映射限制
 ENV LAAP_PORT=11546 \
     LAAP_API_BASE=http://localhost:11546 \
     LAAP_STATE_DIR=/app/aris_brain/state \
+    LAAP_HOST=0.0.0.0 \
     PYTHONPATH="/app:${PYTHONPATH}" \
     PYTHONUNBUFFERED=1
 
