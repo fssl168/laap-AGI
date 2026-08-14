@@ -413,5 +413,87 @@ DEFAULT_RULES: List[Rule] = [
                 ],
                 output_template="{ocr_result}",
             ),
+            # ─── Paper Trading 规则 (ARIS 接管) ───────────────────────
+            Rule(
+                name="pt_account_list",
+                patterns=["paper交易账户", "纸面交易账户", "查看账户", "账户列表", "account list", "list accounts"],
+                intent="pt_account_list",
+                description="列出所有paper_trading虚拟账户",
+                steps=[
+                    RuleStep(tool="pt_account_list", output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_account_show",
+                patterns=["查看账户详情", "账户状态", "account details", "account status"],
+                intent="pt_account_show",
+                description="查看指定账户的详细信息",
+                steps=[
+                    RuleStep(tool="pt_account_show", params={"account_id": "{account_id}"}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_account_positions",
+                patterns=["查看持仓", "我的持仓", "当前持仓", "positions", "持仓列表"],
+                intent="pt_account_positions",
+                description="查看账户当前持仓",
+                steps=[
+                    RuleStep(tool="pt_account_positions", params={"account_id": "{account_id}"}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_strategy_list",
+                patterns=["查看策略", "策略列表", "strategies", "strategy list", "有哪些策略"],
+                intent="pt_strategy_list",
+                description="列出所有paper_trading策略",
+                steps=[
+                    RuleStep(tool="pt_strategy_list", output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_backtest_run",
+                patterns=["跑回测", "运行回测", "backtest", "回测分析", "测试策略"],
+                intent="pt_backtest_run",
+                description="对指定策略运行回测",
+                steps=[
+                    RuleStep(tool="pt_backtest_run", params={"strategy": "{strategy}", "account_id": "{account_id}"}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_risk_check",
+                patterns=["风控检查", "风险检查", "risk check", "风控状态", "检查风险"],
+                intent="pt_risk_check",
+                description="检查paper_trading风控状态",
+                steps=[
+                    RuleStep(tool="pt_risk_check", params={"account_id": "{account_id}"}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_performance",
+                patterns=["绩效报告", "收益报告", "performance", "查看绩效", "盈亏情况"],
+                intent="pt_performance",
+                description="查看paper_trading绩效报告",
+                steps=[
+                    RuleStep(tool="pt_performance", params={"account_id": "{account_id}"}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_health",
+                patterns=["系统健康", "paper_trading健康", "health check", "系统状态"],
+                intent="pt_health",
+                description="检查paper_trading系统健康状态",
+                steps=[
+                    RuleStep(tool="pt_health", output_key="result"),
+                ],
+                output_template="{result}",
+            ),
 ]
+
 

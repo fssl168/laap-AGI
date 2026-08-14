@@ -607,5 +607,13 @@ print(r["output"][:2000])
         ("list_memories", tool_list_memories, "列出语义记忆"),
     ]:
         registry.register(name, fn, desc)
+    
+    # ─── Paper Trading 工具 (ARIS 接管) ────────────────────────
+    try:
+        from .paper_trading_tools import register_paper_trading_tools
+        n = register_paper_trading_tools(registry)
+        logger.info(f"已注册 {n} 个 paper_trading 工具")
+    except Exception as e:
+        logger.warning(f"paper_trading 工具注册失败: {e}")
 
 
