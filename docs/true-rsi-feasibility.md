@@ -222,9 +222,9 @@ self.code_evolution = CodeEvolutionEngine(
 | M1 硬隔离沙箱 | ✅ 完成 | `640fd87` | SandboxTester shell=False + 命令白名单 + shell 元字符拒绝 + 资源限制 + 审计日志；SafetyGuard PROTECTED_FILES 自保护 + shell=True 注入拦截 | +28 项单测 |
 | M2 闭环调度 | ✅ 完成 | `9fa88c4` | evolution_scheduler.py（周期 tick，daemon 线程，LAAP_EVO_ENABLED=1 开启）+ fitness.py（组合适应度：测试通过率 0.4/延迟 0.3/记忆召回 0.3）+ core.py 接线 | +8 项单测 |
 | M3 治理审计 | ✅ 完成 | `ed37ea5` | evolution_audit.py（JSONL 审计 + 冷却期）+ code_evolution 全决策点接入 + API `/v1/evo/audit` `/v1/evo/status` `/v1/evo/rollback` | +9 项单测 |
-| M4 受限递归 | ⏳ 未开始 | — | 允许进化改进业务代码、永久禁止改进安全代码；递归深度 ≤1 | — |
+| M4 受限递归 | ✅ 完成 | `90e7707` | TrueRSIEngine（laap/evolution/true_rsi.py）：作用域限定（仅 laap/agi/ 非核心非安全）+ 递归深度≤1 + 安全基座/核心永久只读 + 守卫注入 CodeEvolutionEngine | +24 项集成测试 |
 
-**测试基线**: 277 → **322 passed / 0 failed**（M1+M2+M3 共 +45 项单测）。
+**测试基线**: 277 → **322 passed / 0 failed**（M1+M2+M3 共 +45 项单测）；M4 后 **370 passed / 0 failed**（+24 项集成测试，`tests/test_true_rsi.py`）。
 
 **启用方式**: `LAAP_EVO_ENABLED=1` 环境变量开启进化调度器（默认关闭）；
 `LAAP_EVO_INTERVAL=3600` 控制 tick 周期；审计日志在 `state/evolution_audit.jsonl`；
@@ -249,3 +249,25 @@ self.code_evolution = CodeEvolutionEngine(
 **新增测试**: `tests/test_evo_deploy_governance.py`（19 项）— 授权检查、approve_and_deploy 全分支（成功/未知 id/错误状态/部署失败）、import 白名单（stdlib/laap 放行、第三方/相对/函数体内拦截）、沙箱只读、`/v1/evo/deploy` 路由注册与 handler 校验。
 
 **运维要点**: 服务进程重启后 mutations 历史清空（内存态），`approve_and_deploy` 只能批准**本次进程内**产生的 mutation；跨进程的审计追溯走 `state/evolution_audit.jsonl` 只读查询。调度器启用时引擎单例与 `/v1/evo/*` 共用，tick 产生的 `awaiting_approval` 提案可直接用 deploy API 批准。
+
+---
+
+## 6.2 M4 受限递归实施（2026-08-15 commit `90e7707`）
+
+按 §3 M4 方案落地，测试基线 346 → **370 passed / 0 failed**（+24 项集成测试，`tests/test_true_rsi.py`）。
+
+| 交付物 | 说明 |
+|---|---|
+| `laap/evolution/true_rsi.py` | `TrueRSIEngine` 受限递归编排层，复用 M1-M3 的 analyzer/patcher/tester/audit/git |
+| `laap/evolution/__init__.py` | M4 包入口（不恢复已废弃的 `laap/evolution/rsi.py`/`aevo`） |
+| 守卫注入 | `CodeEvolutionEngine.scope_guard` 钩子（默认 None，M1-M3 行为不变）+ `auto_improve`/`_improve_single` 增加 `depth` 参数 |
+| `tests/test_true_rsi.py` | 24 项集成测试 |
+
+**四道约束落地**：
+
+1. **作用域限定** — 仅允许 `laap/agi/` 下非核心、非安全文件；`laap_brain/`、`psi_core/`、`aris_brain/` 等一律拒绝。
+2. **永久只读** — `PROTECTED_SAFETY`（code_evolution / evolution_system / rsi_engine / evolution_scheduler / evolution_audit / fitness）+ `PROTECTED_CORE`（core / safety / security_system / `__init__`）在任何递归深度均不可作为 target；目录穿越试探（`laap/agi/../rsi_engine.py`）也会被 base-name 命中只读清单拦截。
+3. **递归深度 ≤ 1** — 唯一可递归目标 `laap/evolution/true_rsi.py`（改进者自身）；深度 0 允许第一层递归，改进测试通过后递归配额耗尽，深度 1 再改被拒（禁止"改进者的改进者"）；改进失败不消耗配额。
+4. **不自动部署** — `improve()` 恒以 `auto_deploy=False` 产出提案，走 `/v1/evo/deploy` 人工批准；批准部署 `true_rsi.py` 提案时同步消耗递归配额。
+
+**验证**（`tests/test_true_rsi.py` 24 项）：永久只读 10 项、作用域外 4 项（含目录穿越）、业务代码放行 1 项、递归深度 4 项、治理审计 2 项、接线回归 2 项、stats 1 项。守卫异常按 fail-closed 拒绝处理（守卫自身抛错 → mutation 被拒，不落入补丁生成）。
