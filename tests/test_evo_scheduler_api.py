@@ -69,6 +69,7 @@ def _isolate(monkeypatch):
 
     monkeypatch.setattr(api, "_evolution_scheduler", None)
     monkeypatch.delenv("LAAP_EVO_ENABLED", raising=False)
+    monkeypatch.delenv("LAAP_TRSI_ENABLED", raising=False)
     monkeypatch.delenv("LAAP_EVO_INTERVAL", raising=False)
     monkeypatch.setattr(ce_mod, "CodeEvolutionEngine", _FakeEngine)
     monkeypatch.setattr(es_mod, "EvolutionScheduler", _FakeScheduler)

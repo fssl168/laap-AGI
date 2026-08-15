@@ -96,7 +96,7 @@ def main() -> int:
     print(f"判定: STABLE_PASS 需通过率 >= {args.pass_threshold:.0%} 且 中位 z >= 1.96")
     print()
 
-    costs = None
+    costs = {}
     if args.costs == "ashare":
         costs = {"commission": 0.00025, "stamp": 0.0005, "slippage": 0.001}
     v = WalkForwardValidator()

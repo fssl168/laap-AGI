@@ -69,7 +69,7 @@ def main() -> int:
     print(f"大样本 walk-forward：{len(data)} 只标的 × >= {args.min_days} 天 "
           f"| family={args.family} costs={args.costs} mtc={args.mtc}")
 
-    costs = None
+    costs = {}
     if args.costs == "ashare":
         costs = {"commission": 0.00025, "stamp": 0.0005, "slippage": 0.001}
     v = WalkForwardValidator()
@@ -101,6 +101,7 @@ def main() -> int:
         "min_days": args.min_days, "train": args.train, "test": args.test,
         "n_samples": args.n_samples, "seed": args.seed,
         "family": args.family, "costs": args.costs, "mtc": args.mtc,
+        "valid_ratio": args.valid_ratio, "style": args.style,
     }
     out = Path(args.out)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2),

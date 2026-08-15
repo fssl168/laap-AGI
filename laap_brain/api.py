@@ -64,6 +64,8 @@ _trading_self: Optional[Any] = None
 _paper_loop: Optional[Any] = None
 # 每日管线调度器（M3，LAAP_QUANT_DAILY=1 启用）
 _quant_daily_scheduler: Optional[Any] = None
+# 新闻盘中轮询 worker（LAAP_NEWS_INTRADAY=1 启用）
+_news_worker: Optional[Any] = None
 
 
 def _get_trading_self() -> Optional[Any]:
@@ -121,6 +123,53 @@ def _start_quant_daily_scheduler() -> Optional[Any]:
         logger.warning(f"QuantDailyScheduler failed to start: {e}")
         _quant_daily_scheduler = None
     return _quant_daily_scheduler
+
+
+def _normalize_symbol(s: str) -> str:
+    """归一化股票代码：去掉 .SH/.SZ 交易所后缀（600511.SH → 600511），保留纯代码。"""
+    s = s.strip()
+    if "." in s:
+        s = s.split(".")[0]
+    return s
+
+
+def _news_symbols() -> List[str]:
+    """新闻盘中轮询标的：
+      - LAAP_NEWS_SYMBOLS 非空时用它（显式指定）
+      - 为空/未设时取 STOCK_LIST 自选股
+      - 都未设用默认 3 只
+    """
+    laap = (os.environ.get("LAAP_NEWS_SYMBOLS") or "").strip()
+    if laap:
+        raw = laap
+    else:
+        raw = os.environ.get("STOCK_LIST") or "600519,000001,000858"
+    return [_normalize_symbol(s) for s in str(raw).split(",") if s.strip()]
+
+
+def _start_news_worker() -> Optional[Any]:
+    """启动新闻盘中轮询（LAAP_NEWS_INTRADAY=1 显式开启，默认关闭）。
+
+    盘中（B5 时段）每 N 分钟（默认 3600s）对标的（LAAP_NEWS_SYMBOLS → STOCK_LIST）
+    轮询新闻 → 判定 → 风控 → 自动下单（Paper）。
+    """
+    global _news_worker
+    if _news_worker is not None:
+        return _news_worker
+    if os.environ.get("LAAP_NEWS_INTRADAY", "") != "1":
+        return None
+    try:
+        from laap.paper_trading.news_pipeline import NewsSignalWorker
+        symbols = _news_symbols()
+        pipe = _get_news_pipeline(auto_order=True)
+        _news_worker = NewsSignalWorker(pipe, symbols=symbols, enabled=True)
+        _news_worker.start()
+        logger.info(f"NewsSignalWorker started (LAAP_NEWS_INTRADAY=1, "
+                    f"symbols={symbols})")
+    except Exception as e:
+        logger.warning(f"NewsSignalWorker failed to start: {e}")
+        _news_worker = None
+    return _news_worker
 
 
 def _get_code_evolution_engine() -> Optional[Any]:
@@ -400,6 +449,10 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
             "有没有", "能否", "能不能", "帮我", "请", "运行", "执行", "打开",
             "查询", "查一下", "接入", "读取", "记忆", "回忆", "记得", "记住",
             "不对", "错了", "不是", "然后", "写一篇", "写个", "生成",
+            # 语音/对话控制类命令 (2026-08-16 补充: 之前语音策略调整时
+            # "发个语音过来"/"直连ARIS" 等控制指令被误当陈述写入, 污染检索)
+            "发个语音", "发一条语音", "发条语音", "发语音", "语音过来",
+            "直连", "接通", "找小龙", "切回", "语音回复", "来段语音", "来条语音",
         )
         # Hermes 系统提示/内部指令 (英文): 命中即不写 (2026-08-14 修复 skill-review 污染)
         _MEM_ENGLISH_HINTS = (
@@ -433,11 +486,14 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
                     should_mem = False
                     break
         if should_mem:
-            # 去重: 与现有记忆高度相似 (>0.85) 则不重复写
+            # 去重: 与现有记忆高度相似 (>0.95) 则不重复写
+            # 2026-08-16: 阈值 0.85→0.95 —— 中文短句嵌入相似度天然偏高,
+            # "榴莲"与"生日"这种无关事实也能到 0.867 被误判重复而丢失,
+            # 只对真正逐字重复的陈述去重 (用户明确要求: 有价值的语音陈述必须记忆)。
             dup = False
             try:
                 for r in sem.recall_memory(_mem_text, top_k=1) or []:
-                    if r.get("score", 0) >= 0.85:
+                    if r.get("score", 0) >= 0.95:
                         dup = True
                         break
             except Exception:
@@ -1507,6 +1563,129 @@ async def handle_quant_kline(request):
         return web.json_response({"error": str(e)}, status=500)
 
 
+# ── 新闻情报闭环 API（P4）──
+
+def _get_news_llm_call():
+    """按 LLM_SOURCES 链构建 news_verifier 的 llm_call 契约（prompt/system/max_tokens）。
+
+    支持 openai/urllib/ollama/local/cli 多源回退（见 laap.paper_trading.llm_sources）。
+    """
+    from laap.paper_trading.llm_sources import build_llm_call
+    return build_llm_call()
+
+
+def _get_news_pipeline(auto_order: bool = True):
+    from laap.paper_trading.news_pipeline import NewsSignalPipeline
+    from laap.paper_trading.quant_config import build_fee_model
+    return NewsSignalPipeline(loop=_get_paper_loop(), db=_get_quant_db(),
+                              llm_call=_get_news_llm_call(),
+                              fee_model=build_fee_model())
+
+
+async def handle_quant_news(request):
+    """GET /v1/quant/news?symbol= — 新闻判定 + 联表新闻内容（news_verdicts ⋈ news_items）。"""
+    try:
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        symbol = request.query.get("symbol", "")
+        conn = db.conn()
+        try:
+            if symbol:
+                rows = conn.execute(
+                    "SELECT v.*, n.title, n.content, n.source AS news_source, n.url "
+                    "FROM news_verdicts v LEFT JOIN news_items n ON v.news_id = n.id "
+                    "WHERE v.symbol=? ORDER BY v.ts DESC LIMIT 50", (symbol,)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT v.*, n.title, n.content, n.source AS news_source, n.url "
+                    "FROM news_verdicts v LEFT JOIN news_items n ON v.news_id = n.id "
+                    "ORDER BY v.ts DESC LIMIT 50").fetchall()
+        finally:
+            conn.close()
+        return web.json_response([dict(r) for r in rows])
+    except Exception as e:
+        logger.warning(f"quant_news failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_profile(request):
+    """GET /v1/quant/profile?symbol= — 个股资料/股票概况。"""
+    try:
+        from laap.paper_trading.news_intel import fetch_stock_profile
+        symbol = request.query.get("symbol", "")
+        if not symbol:
+            return web.json_response({"error": "symbol required"}, status=400)
+        prof, meta = fetch_stock_profile(symbol)
+        return web.json_response({"profile": prof.to_dict() if prof else None,
+                                  "meta": meta})
+    except Exception as e:
+        logger.warning(f"quant_profile failed: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_quant_news_verify(request):
+    """POST /v1/quant/news/verify — 手动判定单条新闻 {symbol,title,content}。"""
+    try:
+        data = await request.json()
+        symbol = data.get("symbol", "")
+        title = data.get("title", "")
+        content = data.get("content", "")
+        if not symbol or not title:
+            return web.json_response({"error": "symbol+title required"}, status=400)
+        from laap.paper_trading.news_intel import NewsItem, fetch_stock_profile
+        from laap.paper_trading.news_verifier import verify_news, compute_tech_state
+        item = NewsItem(symbol=symbol, title=title, content=content)
+        profile, _meta = fetch_stock_profile(symbol)
+        ts = compute_tech_state(symbol)
+        v = verify_news(item, profile, ts, llm_call=_get_news_llm_call())
+        return web.json_response(v.to_dict())
+    except Exception as e:
+        logger.warning(f"quant_news_verify failed: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_quant_news_scan(request):
+    """POST /v1/quant/news/scan — 立即跑一次全管线 {symbol, auto_order, force}。"""
+    try:
+        data = await request.json()
+        symbol = data.get("symbol", "")
+        auto_order = bool(data.get("auto_order", False))
+        force = bool(data.get("force", False))
+        if not symbol:
+            return web.json_response({"error": "symbol required"}, status=400)
+        pipe = _get_news_pipeline(auto_order=auto_order)
+        result = pipe.run(symbol, auto_order=auto_order, force=force)
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"quant_news_scan failed: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_quant_risk_rejections(request):
+    """GET /v1/quant/risk/rejections?symbol= — 风控拒绝审计（刑部）。"""
+    try:
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        symbol = request.query.get("symbol", "")
+        conn = db.conn()
+        try:
+            if symbol:
+                rows = conn.execute(
+                    "SELECT * FROM risk_rejections WHERE symbol=? "
+                    "ORDER BY ts DESC LIMIT 100", (symbol,)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM risk_rejections ORDER BY ts DESC LIMIT 100").fetchall()
+        finally:
+            conn.close()
+        return web.json_response([dict(r) for r in rows])
+    except Exception as e:
+        logger.warning(f"quant_risk_rejections failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
 async def handle_root(request):
     return web.json_response({
         "name": "LAAP Brain API",
@@ -1617,6 +1796,12 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/quant/outcomes", handle_quant_outcomes)
     app.router.add_get("/v1/quant/decisions", handle_quant_decisions)
     app.router.add_get("/v1/quant/kline", handle_quant_kline)
+    # 新闻情报闭环（P4）
+    app.router.add_get("/v1/quant/news", handle_quant_news)
+    app.router.add_get("/v1/quant/profile", handle_quant_profile)
+    app.router.add_post("/v1/quant/news/verify", handle_quant_news_verify)
+    app.router.add_post("/v1/quant/news/scan", handle_quant_news_scan)
+    app.router.add_get("/v1/quant/risk/rejections", handle_quant_risk_rejections)
     return app
 
 
@@ -1642,6 +1827,8 @@ def main():
     _start_evolution_scheduler()
     # M3 量化: 每日管线调度器 (LAAP_QUANT_DAILY=1 时)
     _start_quant_daily_scheduler()
+    # 新闻盘中轮询 (LAAP_NEWS_INTRADAY=1 时)
+    _start_news_worker()
 
     app = create_app()
     logger.info(f"LAAP Brain API starting on {host}:{port}")

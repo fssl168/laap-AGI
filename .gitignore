@@ -64,19 +64,29 @@ _tmp*.py
 _wx_*.txt
 aris_chat_history.json
 aris_mode.json
+.agent_events.json
+rsi_*.json
 
 # ========== Node ==========
 node_modules/
 psi_state.json
 audit_log.jsonl
 
+# ========== 第三方二进制 ==========
+tools/
+nssm*
+*.zip
+
 # ========== 本地备份 ==========
 *.bak-*
 *.bak
+*.bak*
+aris_brain/*.bak*
 
 # ========== LAAP 运行时状态 ==========
 agi_state/
 data/
+real_data/
 voice_cache/
 paper_trading/
 .sync_backup/

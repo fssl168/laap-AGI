@@ -170,11 +170,13 @@ def test_evolve_returns_full_structure(synth_prices):
 
 def test_param_evolver_score_uses_compute_trade_fitness(synth_prices):
     """阶段 3.1 契约：param_evolver 的 score == compute_trade_fitness 组合分。"""
-    from laap.paper_trading.backtest_runner import _run_multi_factor
+    from laap.paper_trading.backtest_runner import (
+        _run_multi_factor, DEFAULT_COSTS)
     from laap.paper_trading.trade_fitness import compute_trade_fitness
     ev = ParamEvolver()
     scored = ev._score(synth_prices, STRATEGY_PARAMS)
-    nv = _run_multi_factor(synth_prices, STRATEGY_PARAMS)
+    # _score 走 run_backtest 默认 A 股成本，此处显式对齐成本口径
+    nv = _run_multi_factor(synth_prices, STRATEGY_PARAMS, costs=DEFAULT_COSTS)
     tf = compute_trade_fitness(nv)
     assert scored["score"] == tf["score"]
     assert scored["cumulative_return"] == tf["cumulative_return"]

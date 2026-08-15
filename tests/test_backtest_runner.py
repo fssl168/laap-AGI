@@ -196,21 +196,29 @@ def test_t1_guard_no_regression():
 # ════════════════════════════════════════════════════════════
 
 def _up_then_crash_recover():
-    """买入持有后遇跌停日（-12%+）再反弹——验证跌停禁卖把持仓锁住。"""
-    up = [100.0 + i * 1.0 for i in range(20)] + \
-         [120.0 - i * 1.5 for i in range(8)]
-    rebound = [110.0 + i * 0.6 for i in range(8)]  # 8 天反弹触发买入
-    crash = [100.0]   # -12.4% 跌停日
-    recover = [104.0, 108.0, 112.0, 116.0]
-    return up + rebound + crash + recover
+    """上升建仓 → 暴跌触发止损 → 次日跌停开盘被锁 → 反弹。
+
+    次日开盘成交模型下构造：bar i 收盘触发止损（-12%），bar i+1 开盘
+    又是 -12%（跌停）→ 卖被锁；随后反弹。无涨跌停则按低点割肉。
+    """
+    up = [100.0 + i * 0.5 for i in range(40)]  # 100..119.5 上升（建仓并持有）
+    d1 = up[-1] * 0.88                          # -12% 暴跌日（触发止损）
+    return up + [d1, d1 * 0.88, d1 * 1.0, d1 * 1.06, d1 * 1.12]
 
 
 def test_price_limit_blocks_sell_at_limit_down():
     """跌停日禁卖 → 持仓被锁，随后反弹优于立即割肉。"""
     runner = BacktestRunner()
     prices = _up_then_crash_recover()
-    m_no = runner.run_backtest(prices, STRATEGY_PARAMS, price_limit=None)
-    m_lim = runner.run_backtest(prices, STRATEGY_PARAMS, price_limit=0.10)
+    # 自定义参数：紧止损 5% 触发暴跌日离场；关闭超买/止盈/移动止损避免提前退出
+    params = dict(STRATEGY_PARAMS)
+    params.update({
+        "fast_ma": 3, "slow_ma": 30,
+        "rsi_overbought": 200.0, "take_profit_pct": 5.0,
+        "trailing_stop": 0.5, "stop_loss_pct": 0.05, "atr_stop_mult": 50.0,
+    })
+    m_no = runner.run_backtest(prices, params, price_limit=None)
+    m_lim = runner.run_backtest(prices, params, price_limit=0.10)
     assert m_lim["cumulative_return"] > m_no["cumulative_return"]
 
 

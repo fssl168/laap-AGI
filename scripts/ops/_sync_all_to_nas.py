@@ -19,31 +19,15 @@ HOST, PORT, USER, PASS = "192.168.88.251", 18922, "wolf", "Qiu@121236"
 NAS_ROOT = "/vol1/@appdata/trim.hermes/workspace/laap-AGI"
 LOCAL_ROOT = r"D:\laap-AGI"
 
-FILES = [
-    # paper_trading 全目录
-    "laap/paper_trading/__init__.py",
-    "laap/paper_trading/backtest_runner.py",
-    "laap/paper_trading/daily_pipeline.py",
-    "laap/paper_trading/db.py",
-    "laap/paper_trading/decision_record.py",
-    "laap/paper_trading/export_real_data.py",
-    "laap/paper_trading/kline_source.py",
-    "laap/paper_trading/ledger.py",
-    "laap/paper_trading/llm_refine.py",
-    "laap/paper_trading/market_source.py",
-    "laap/paper_trading/memory_bridge.py",
-    "laap/paper_trading/models.py",
-    "laap/paper_trading/paper_replay.py",
-    "laap/paper_trading/paper_service.py",
-    "laap/paper_trading/param_evolver.py",
-    "laap/paper_trading/param_extractor.py",
-    "laap/paper_trading/quant_evolution.py",
-    "laap/paper_trading/settle.py",
-    "laap/paper_trading/significance.py",
-    "laap/paper_trading/strategy.py",
-    "laap/paper_trading/trade_fitness.py",
-    "laap/paper_trading/trading_self.py",
-    "laap/paper_trading/walkforward.py",
+
+def _collect_paper_trading() -> list:
+    """动态收集 laap/paper_trading/ 全部 .py（避免清单遗漏新文件）。"""
+    base = os.path.join(LOCAL_ROOT, "laap", "paper_trading")
+    return [f"laap/paper_trading/{f}" for f in sorted(os.listdir(base))
+            if f.endswith(".py")]
+
+
+FILES = _collect_paper_trading() + [
     # 核心
     "laap/evolution/true_rsi.py",
     "laap_brain/api.py",
@@ -70,6 +54,7 @@ FILES = [
     "scripts/verify_oos_gate_real.py",
     "scripts/verify_system_components_real.py",
     "scripts/rsi_oos_backtest.py",
+    "scripts/test_all_data_sources.py",
     # 环境示例
     ".env.example",
     # 注意: aris_brain/aris_cognitive_bridge.py 按用户要求不同步

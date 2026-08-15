@@ -223,3 +223,139 @@ def test_quant_apply_params_ok(monkeypatch):
     d = json.loads(resp.text)
     assert d["status"] == "awaiting_approval"
     assert captured["self_review"] is False
+
+
+# ════════════════════════════════════════════════════════════
+# 新闻情报闭环 API（P4）
+# ════════════════════════════════════════════════════════════
+
+def test_news_routes_registered():
+    """create_app 应注册 5 条新闻情报路由。"""
+    from laap_brain.api import create_app
+    app = create_app()
+    routes = {r.resource.canonical for r in app.router.routes() if r.resource}
+    expected = {
+        "/v1/quant/news",
+        "/v1/quant/profile",
+        "/v1/quant/news/verify",
+        "/v1/quant/news/scan",
+        "/v1/quant/risk/rejections",
+    }
+    assert expected.issubset(routes)
+
+
+def _FakeDBWithSchema(path):
+    import sqlite3
+    conn = sqlite3.connect(str(path))
+    conn.executescript("""
+    CREATE TABLE news_verdicts (news_id TEXT, symbol TEXT, verdict TEXT,
+        confidence REAL, reasons_json TEXT, impact TEXT, rsi REAL,
+        trade_action TEXT, dispatched INTEGER, decision_id TEXT,
+        used_fallback INTEGER, ts REAL);
+    CREATE TABLE news_items (id TEXT PRIMARY KEY, symbol TEXT, title TEXT,
+        content TEXT, source TEXT, published_at TEXT, url TEXT, fetched_ts REAL);
+    CREATE TABLE risk_rejections (id TEXT, symbol TEXT, rule_id TEXT,
+        reason TEXT, meta_json TEXT, ts REAL);
+    """)
+    conn.commit()
+    conn.close()
+
+    class _DB:
+        def conn(self):
+            c = sqlite3.connect(str(path))
+            c.row_factory = sqlite3.Row
+            return c
+    return _DB()
+
+
+def test_quant_news_ok(monkeypatch, tmp_path):
+    import laap_brain.api as api
+    db = _FakeDBWithSchema(tmp_path / "n.db")
+    c = db.conn()
+    c.execute("INSERT INTO news_verdicts (news_id,symbol,verdict,confidence,"
+              "reasons_json,impact,rsi,trade_action,dispatched,decision_id,"
+              "used_fallback,ts) VALUES ('n1','600519','genuine_bullish',0.8,"
+              "'[]','',55,'buy',1,'dec1',0,1.0)")
+    c.execute("INSERT INTO news_items (id,symbol,title,content,source,"
+              "published_at,url,fetched_ts) VALUES ('n1','600519','茅台提价',"
+              "'核心产品提价','公告','2026-08-15','http://x',1.0)")
+    c.commit()
+    c.close()
+    monkeypatch.setattr(api, "_get_quant_db", lambda: db)
+    resp = _run(api.handle_quant_news(_Req(query={"symbol": "600519"})))
+    assert resp.status == 200
+    rows = json.loads(resp.text)
+    assert len(rows) == 1
+    assert rows[0]["verdict"] == "genuine_bullish"
+    assert rows[0]["title"] == "茅台提价"  # 联表 news_items 返回标题
+
+
+def test_quant_profile_missing_symbol(monkeypatch):
+    import laap_brain.api as api
+    resp = _run(api.handle_quant_profile(_Req()))
+    assert resp.status == 400
+
+
+def test_quant_news_verify_missing_fields():
+    import laap_brain.api as api
+    resp = _run(api.handle_quant_news_verify(_Req(body={"symbol": "600519"})))
+    assert resp.status == 400
+
+
+def test_quant_news_verify_ok(monkeypatch):
+    import laap_brain.api as api
+    import laap.paper_trading.news_verifier as nv
+    import laap.paper_trading.news_intel as ni
+    captured = {}
+
+    def _fake_verify(item, profile, ts, llm_call=None):
+        captured.update(symbol=item.symbol, title=item.title)
+        from laap.paper_trading.news_verifier import NewsVerdict
+        return NewsVerdict(news_id="n1", verdict="genuine_bullish",
+                           confidence=0.9, reasons=["利好"], trade_action="buy")
+    monkeypatch.setattr(nv, "compute_tech_state", lambda *a, **k: None)
+    monkeypatch.setattr(ni, "fetch_stock_profile", lambda *a, **k: (None, {}))
+    monkeypatch.setattr(nv, "verify_news", _fake_verify)
+    resp = _run(api.handle_quant_news_verify(
+        _Req(body={"symbol": "600519", "title": "茅台提价", "content": "c"})))
+    assert resp.status == 200
+    d = json.loads(resp.text)
+    assert d["verdict"] == "genuine_bullish"
+    assert captured["symbol"] == "600519"
+
+
+def test_quant_news_scan_missing_symbol():
+    import laap_brain.api as api
+    resp = _run(api.handle_quant_news_scan(_Req(body={})))
+    assert resp.status == 400
+
+
+def test_quant_news_scan_ok(monkeypatch):
+    import laap_brain.api as api
+
+    class _StubPipe:
+        def run(self, symbol, auto_order=True, force=False):
+            return {"symbol": symbol, "dispatched": True, "silent": False,
+                    "reason": "真利好 → 自动下单", "news_count": 1}
+    monkeypatch.setattr(api, "_get_news_pipeline", lambda auto_order=True: _StubPipe())
+    resp = _run(api.handle_quant_news_scan(
+        _Req(body={"symbol": "600519", "auto_order": True})))
+    assert resp.status == 200
+    d = json.loads(resp.text)
+    assert d["dispatched"] is True
+
+
+def test_quant_risk_rejections_ok(monkeypatch, tmp_path):
+    import laap_brain.api as api
+    db = _FakeDBWithSchema(tmp_path / "r.db")
+    c = db.conn()
+    c.execute("INSERT INTO risk_rejections (id,symbol,rule_id,reason,meta_json,ts)"
+              " VALUES ('r1','600519','R2','超仓','{}',1.0)")
+    c.commit()
+    c.close()
+    monkeypatch.setattr(api, "_get_quant_db", lambda: db)
+    resp = _run(api.handle_quant_risk_rejections(_Req(query={"symbol": "600519"})))
+    assert resp.status == 200
+    rows = json.loads(resp.text)
+    assert len(rows) == 1
+    assert rows[0]["rule_id"] == "R2"
