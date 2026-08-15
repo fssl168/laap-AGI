@@ -576,6 +576,27 @@ DEFAULT_RULES: List[Rule] = [
                 ],
                 output_template="{result}",
             ),
+            # ── Phase 3 新增 (方案 v2.0 §4.4): 管理闭环规则 ──
+            Rule(
+                name="pt_brief_rule",
+                patterns=["今日交易简报", "今天交易怎么样", "今日复盘", "今天盈亏", "日报", "daily brief", "交易简报", "今天情况"],
+                intent="pt_brief",
+                description="每日交易简报（管理/报告能力）",
+                steps=[
+                    RuleStep(tool="pt_brief", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_evolution_rule",
+                patterns=["进化提案", "策略改进", "进化审计", "有哪些提案", "看下提案", "evolution audit", "进化治理"],
+                intent="pt_evolution_audit",
+                description="进化治理提案（管理/治理能力）",
+                steps=[
+                    RuleStep(tool="pt_evolution_audit", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
 ]
 
 

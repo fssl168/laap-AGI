@@ -58,6 +58,10 @@ def _run(action: str, **kwargs) -> str:
             return _net_value(conn)
         elif action == "risk_events":
             return _risk_events(conn)
+        elif action == "brief":
+            return _brief(conn)
+        elif action == "evolution_audit":
+            return _evolution_audit()
         else:
             return f"未知操作: {action}"
     except Exception as e:
@@ -262,6 +266,77 @@ def _account_show(conn) -> str:
         return f"账户详情查询失败: {e}"
 
 
+# ─── Phase 3 新增: 管理闭环工具 (方案 v2.0 §4.4) ────────────
+
+def _brief(conn) -> str:
+    """每日交易简报: 净值/盈亏/教训/明日关注 (结构化复盘)。"""
+    try:
+        from datetime import datetime
+        result = "📊 今日交易简报\n"
+        # 1. 净值
+        cursor = conn.execute("SELECT ts, total FROM net_values ORDER BY ts DESC LIMIT 2")
+        rows = cursor.fetchall()
+        if rows:
+            ts = datetime.fromtimestamp(rows[0][0]).strftime("%m-%d %H:%M")
+            result += f"  最新净值: {rows[0][1]:.2f} ({ts})\n"
+            if len(rows) > 1 and rows[1][1]:
+                chg = (rows[0][1] - rows[1][1]) / rows[1][1] * 100
+                result += f"  较上次: {chg:+.2f}%\n"
+        else:
+            result += "  净值: 暂无记录\n"
+        # 2. 今日盈亏 (按日期统计 trades)
+        cursor = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM trades "
+            "WHERE date(entry_ts,'unixepoch','localtime') = date('now','localtime')")
+        cnt, pnl = cursor.fetchone()
+        result += f"  今日交易: {cnt}笔 | 盈亏: {pnl:+.2f}\n"
+        # 3. 持仓
+        cursor = conn.execute("SELECT COUNT(DISTINCT symbol) FROM trades WHERE exit_ts IS NULL")
+        result += f"  未平仓标的: {cursor.fetchone()[0]}个\n"
+        # 4. 教训 (最近2条)
+        cursor = conn.execute(
+            "SELECT o.lesson_type, o.lesson FROM outcomes o "
+            "WHERE o.lesson IS NOT NULL AND o.lesson != '' "
+            "ORDER BY o.trade_id DESC LIMIT 2")
+        lessons = cursor.fetchall()
+        if lessons:
+            result += "  教训:\n"
+            for lt, ls in lessons:
+                result += f"    - [{lt or 'general'}] {ls[:50]}\n"
+        # 5. 风控事件 (今日)
+        cursor = conn.execute(
+            "SELECT COUNT(*) FROM risk_rejections "
+            "WHERE date(ts,'unixepoch','localtime') = date('now','localtime')")
+        rej = cursor.fetchone()[0]
+        result += f"  风控拦截: {rej}次"
+        return result
+    except Exception as e:
+        return f"简报生成失败: {e}"
+
+
+def _evolution_audit() -> str:
+    """进化治理: 列出近期进化提案 (读 EvolutionAuditLog, 与 /v1/quant/evolve/audit 同源)。"""
+    try:
+        from laap.agi.evolution_audit import EvolutionAuditLog
+        audit = EvolutionAuditLog(repo_root=LAAP_ROOT)
+        st = audit.stats()
+        recent = audit.query(limit=10)
+        result = f"🔬 进化治理 (共 {st['total_entries']} 条审计记录)\n"
+        by = st.get("by_decision", {})
+        result += f"  决策分布: {by}\n"
+        if not recent:
+            result += "  暂无进化提案"
+            return result
+        result += "  最近记录:\n"
+        for e in recent:
+            tgt = e.get("target", "")
+            d = e.get("decision", "")
+            result += f"    - [{d}] {tgt}: {e.get('reason','')[:40]}\n"
+        return result
+    except Exception as e:
+        return f"进化审计查询失败: {e}"
+
+
 # ─── Phase 1 新增: 学习/识别类只读工具 (方案 v2.0 §4.2.1) ─────
 
 def _lessons(conn) -> str:
@@ -419,6 +494,9 @@ PAPER_TRADING_TOOLS: Dict[str, Dict[str, Any]] = {
     "pt_decide": {"fn": lambda symbol, action, qty=0, rationale="": _quant_decide(symbol, action, qty, rationale), "desc": "交易决策建议(审核,不下单)"},
     "pt_execute": {"fn": lambda symbol, action, qty, confirm_word="": _quant_execute(symbol, action, qty, confirm_word), "desc": "确认执行下单(需二次确认)"},
     "pt_close": {"fn": lambda symbol, qty=0, confirm_word="": _quant_close(symbol, qty, confirm_word), "desc": "平仓(需审核+确认)"},
+    # Phase 3 新增 (方案 v2.0 §4.4): 管理闭环工具
+    "pt_brief": {"fn": lambda: _run("brief"), "desc": "每日交易简报"},
+    "pt_evolution_audit": {"fn": lambda: _run("evolution_audit"), "desc": "进化治理提案"},
 }
 
 
