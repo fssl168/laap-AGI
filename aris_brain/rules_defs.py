@@ -494,6 +494,57 @@ DEFAULT_RULES: List[Rule] = [
                 ],
                 output_template="{result}",
             ),
+            # ── Phase 1 新增 (方案 v2.0 §4.2.1): 学习/识别类规则 ──
+            Rule(
+                name="pt_lessons_rule",
+                patterns=["有什么教训", "学到什么", "交易教训", "吃过什么亏", "复盘教训", "lessons", "lesson"],
+                intent="pt_lessons",
+                description="查询交易教训（学习能力）",
+                steps=[
+                    RuleStep(tool="pt_lessons", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_signals_rule",
+                patterns=["最近信号", "交易信号", "有什么信号", "信号列表", "最新信号", "signals"],
+                intent="pt_signals",
+                description="查询最近交易信号（识别能力）",
+                steps=[
+                    RuleStep(tool="pt_signals", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_net_value_rule",
+                patterns=["赚了还是亏", "净值多少", "交易怎么样", "盈亏情况", "赚了没", "net value", "net_value", "净值"],
+                intent="pt_net_value",
+                description="查询净值与盈亏（识别能力）",
+                steps=[
+                    RuleStep(tool="pt_net_value", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_risk_events_rule",
+                patterns=["风控拒绝", "被风控", "拒绝记录", "风控事件", "risk events", "risk_rejections"],
+                intent="pt_risk_events",
+                description="查询风控拒绝事件（识别能力）",
+                steps=[
+                    RuleStep(tool="pt_risk_events", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_portfolio_rule",
+                patterns=["当前持仓", "我的持仓", "持仓情况", "有哪些持仓", "仓位", "positions", "portfolio"],
+                intent="pt_portfolio",
+                description="查询当前持仓（识别能力）",
+                steps=[
+                    RuleStep(tool="pt_account_positions", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
 ]
 
 

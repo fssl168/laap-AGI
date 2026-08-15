@@ -52,6 +52,12 @@ def _run(action: str, **kwargs) -> str:
             return _trades(conn)
         elif action == "evolutions":
             return _evolutions(conn)
+        elif action == "lessons":
+            return _lessons(conn)
+        elif action == "net_value":
+            return _net_value(conn)
+        elif action == "risk_events":
+            return _risk_events(conn)
         else:
             return f"未知操作: {action}"
     except Exception as e:
@@ -256,6 +262,75 @@ def _account_show(conn) -> str:
         return f"账户详情查询失败: {e}"
 
 
+# ─── Phase 1 新增: 学习/识别类只读工具 (方案 v2.0 §4.2.1) ─────
+
+def _lessons(conn) -> str:
+    """交易教训 (outcomes.lesson 非空条目, 关联 trades 取 symbol)。"""
+    try:
+        cursor = conn.execute("""
+            SELECT o.trade_id, COALESCE(t.symbol, ''), o.lesson_type, o.lesson
+            FROM outcomes o
+            LEFT JOIN trades t ON t.id = o.trade_id
+            WHERE o.lesson IS NOT NULL AND o.lesson != ''
+            ORDER BY o.trade_id DESC
+            LIMIT 10
+        """)
+        rows = cursor.fetchall()
+        if not rows:
+            return "暂无交易教训"
+        result = "最近10条交易教训:\n"
+        for r in rows:
+            result += f"  [{r[0]}] {r[1] or '-'} ({r[2] or 'general'}): {r[3][:60]}\n"
+        return result
+    except Exception as e:
+        return f"教训查询失败: {e}"
+
+
+def _net_value(conn) -> str:
+    """净值/盈亏摘要。"""
+    try:
+        cursor = conn.execute("SELECT ts, total FROM net_values ORDER BY ts DESC LIMIT 2")
+        rows = cursor.fetchall()
+        if not rows:
+            return "暂无净值记录"
+        latest = rows[0]
+        from datetime import datetime
+        ts = datetime.fromtimestamp(latest[0]).strftime("%Y-%m-%d %H:%M")
+        line = f"最新净值: {latest[1]:.2f} ({ts})\n"
+        if len(rows) > 1:
+            change = latest[1] - rows[1][1]
+            line += f"  较上次: {change:+.2f} ({(change/rows[1][1]*100) if rows[1][1] else 0:+.2f}%)\n"
+        # 累计盈亏
+        cursor = conn.execute("SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM trades")
+        cnt, pnl = cursor.fetchone()
+        line += f"  累计交易: {cnt}笔 | 累计盈亏: {pnl:+.2f}"
+        return line
+    except Exception as e:
+        return f"净值查询失败: {e}"
+
+
+def _risk_events(conn) -> str:
+    """风控拒绝事件。"""
+    try:
+        cursor = conn.execute("""
+            SELECT symbol, rule_id, reason, ts
+            FROM risk_rejections
+            ORDER BY ts DESC
+            LIMIT 10
+        """)
+        rows = cursor.fetchall()
+        if not rows:
+            return "暂无风控拒绝记录"
+        result = "最近10条风控拒绝:\n"
+        for r in rows:
+            from datetime import datetime
+            ts = datetime.fromtimestamp(r[3]).strftime("%m-%d %H:%M") if r[3] else "-"
+            result += f"  [{ts}] {r[0] or '-'} {r[1]}: {r[2][:50]}\n"
+        return result
+    except Exception as e:
+        return f"风控事件查询失败: {e}"
+
+
 # ─── 工具注册表 ────────────────────────────────────────────
 
 PAPER_TRADING_TOOLS: Dict[str, Dict[str, Any]] = {
@@ -277,6 +352,10 @@ PAPER_TRADING_TOOLS: Dict[str, Dict[str, Any]] = {
     "pt_orders": {"fn": lambda: _run("orders"), "desc": "订单列表"},
     "pt_trades": {"fn": lambda: _run("trades"), "desc": "成交列表"},
     "pt_evolve": {"fn": lambda: _run("evolutions"), "desc": "演化记录"},
+    # Phase 1 新增 (方案 v2.0 §4.2.1): 学习/识别类只读工具
+    "pt_lessons": {"fn": lambda: _run("lessons"), "desc": "交易教训"},
+    "pt_net_value": {"fn": lambda: _run("net_value"), "desc": "净值/盈亏摘要"},
+    "pt_risk_events": {"fn": lambda: _run("risk_events"), "desc": "风控拒绝事件"},
 }
 
 

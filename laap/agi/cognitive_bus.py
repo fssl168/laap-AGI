@@ -213,6 +213,12 @@ class CognitiveEventType(str, Enum):
     ACTION_TAKEN = "action_taken"
     CONSCIOUS_FRAME = "conscious_frame"
     CYCLE_TICK = "cycle_tick"
+    # ── Phase 1 新增: 量化交易事件 (方案 v2.0 §3.2) ──
+    QUANT_SIGNAL = "quant_signal"
+    QUANT_TRADE_CLOSED = "quant_trade_closed"
+    QUANT_RISK_TRIGGERED = "quant_risk_triggered"
+    QUANT_DAILY_SETTLE = "quant_daily_settle"
+    QUANT_EVOLUTION_PROPOSED = "quant_evolution_proposed"
 
 
 @dataclass
