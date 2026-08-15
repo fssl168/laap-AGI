@@ -23,11 +23,11 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # zm_yunxi (云希) → edge-tts 音色映射
 VOICE_MAP = {
-    # 固定：女声 + 中文 + 清新自然（晓伊 Xiaoyi，清新自然）——任何音色一律映射到晓伊
-    "zm_yunxi": "zh-CN-XiaoxiaoNeural",       # 原云希(男) → 固定晓伊(清新自然)
+    # 固定：女声 + 中文 + 温柔女声（晓晓 Xiaoxiao）——任何音色一律映射到晓伊
+    "zm_yunxi": "zh-CN-XiaoxiaoNeural",       # 原云希(男) → 固定晓晓(温柔女声)
     "zm_yunyang": "zh-CN-XiaoxiaoNeural",     # 原云扬(男) → 固定晓伊
     "zm_xiaoxiao": "zh-CN-XiaoxiaoNeural",
-    "zm_xiaoyi": "zh-CN-XiaoxiaoNeural",      # 原晓伊(清新) → 固定晓伊(清新自然)
+    "zm_xiaoyi": "zh-CN-XiaoxiaoNeural",      # 原晓伊(清新) → 固定晓晓(温柔女声)
     "zf_xiaoxiao": "zh-CN-XiaoxiaoNeural",    # ARIS 返回的 zf 前缀音色 → 晓伊
     "zh-CN-XiaoxiaoNeural": "zh-CN-XiaoxiaoNeural",
     "zh-CN-YunxiNeural": "zh-CN-XiaoxiaoNeural",

@@ -19,8 +19,8 @@ CACHE_DIR = str(Path(__file__).resolve().parent.parent.parent / "voice_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 VOICE_MAP = {
-    # 固定：女声 + 中文 + 清新自然（晓伊 Xiaoyi，清新自然）
-    "zm_yunxi": "zh-CN-XiaoxiaoNeural",      # 原云希(男) → 固定晓伊(清新自然)
+    # 固定：女声 + 中文 + 温柔女声（晓晓 Xiaoxiao）
+    "zm_yunxi": "zh-CN-XiaoxiaoNeural",      # 原云希(男) → 固定晓晓(温柔女声)
     "zm_yunyang": "zh-CN-XiaoxiaoNeural",
     "zm_xiaoxiao": "zh-CN-XiaoxiaoNeural",
     "zm_xiaoyi": "zh-CN-XiaoxiaoNeural",
