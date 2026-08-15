@@ -236,13 +236,40 @@ def _evolutions(conn) -> str:
         return f"演化查询失败: {e}"
 
 
+def _account_show(conn) -> str:
+    """单账户详情（LAAP 单系统：返回账户概况 + 资金 + 持仓数）。"""
+    try:
+        result = "LAAP paper_trading 账户（单系统）:\n"
+        # 资金：净值曲线最新值
+        cursor = conn.execute("SELECT total FROM net_values ORDER BY ts DESC LIMIT 1")
+        last = cursor.fetchone()
+        result += f"  最新净值: {last[0]:.2f}\n" if last else "  净值: 暂无记录\n"
+        # 持仓数
+        cursor = conn.execute("SELECT COUNT(DISTINCT symbol) FROM trades WHERE exit_ts IS NULL")
+        positions = cursor.fetchone()[0]
+        result += f"  未平仓标的: {positions}个\n"
+        # 总交易
+        cursor = conn.execute("SELECT COUNT(*) FROM trades")
+        result += f"  累计交易: {cursor.fetchone()[0]}笔"
+        return result
+    except Exception as e:
+        return f"账户详情查询失败: {e}"
+
+
 # ─── 工具注册表 ────────────────────────────────────────────
 
 PAPER_TRADING_TOOLS: Dict[str, Dict[str, Any]] = {
     "pt_health": {"fn": lambda: _run("health"), "desc": "系统健康检查"},
     "pt_account_list": {"fn": lambda: _run("account_list"), "desc": "列出账户(LAAP单系统)"},
+    # 命名统一（规则侧引用名 = 注册名，消除悬空引用）：
+    #   pt_account_show  → 账户详情
+    #   pt_account_positions / pt_positions → 持仓（别名）
+    #   pt_strategy_list / pt_strategies → 策略（别名）
+    "pt_account_show": {"fn": lambda: _account_show(_db()), "desc": "查看账户详情"},
     "pt_positions": {"fn": lambda: _run("positions"), "desc": "查看持仓"},
+    "pt_account_positions": {"fn": lambda: _run("positions"), "desc": "查看持仓(规则名)"},
     "pt_strategies": {"fn": lambda: _run("strategies"), "desc": "查看策略"},
+    "pt_strategy_list": {"fn": lambda: _run("strategies"), "desc": "查看策略(规则名)"},
     "pt_backtest_run": {"fn": lambda strategy: _run("backtest", strategy=strategy), "desc": "运行回测"},
     "pt_risk_check": {"fn": lambda: _run("risk_check"), "desc": "风控检查"},
     "pt_performance": {"fn": lambda: _run("performance"), "desc": "绩效报告"},
