@@ -545,6 +545,37 @@ DEFAULT_RULES: List[Rule] = [
                 ],
                 output_template="{result}",
             ),
+            # ── Phase 2 新增 (方案 v2.0 §4.3): 动作规则 (带审核/二次确认) ──
+            Rule(
+                name="pt_decide_rule",
+                patterns=["要不要买", "要不要卖", "值得买吗", "该不该买", "能买吗", "可以买", "分析下买", "decide"],
+                intent="pt_decide",
+                description="交易决策建议（审核，不下单）",
+                steps=[
+                    RuleStep(tool="pt_decide", params={"symbol": "{symbol}", "action": "{action}", "qty": "{qty}"}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_execute_rule",
+                patterns=["确认执行", "确认下单", "下单吧", "执行买入", "执行卖出", "就买", "买吧"],
+                intent="pt_execute",
+                description="确认执行下单（需二次确认 + TradingSelf 审核）",
+                steps=[
+                    RuleStep(tool="pt_execute", params={"symbol": "{symbol}", "action": "{action}", "qty": "{qty}", "confirm_word": "{confirm_word}"}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_close_rule",
+                patterns=["平仓", "清仓", "卖出持仓", "止盈", "止损", "close position"],
+                intent="pt_close",
+                description="平仓（需审核 + 确认）",
+                steps=[
+                    RuleStep(tool="pt_close", params={"symbol": "{symbol}", "qty": "{qty}", "confirm_word": "{confirm_word}"}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
 ]
 
 

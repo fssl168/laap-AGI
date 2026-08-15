@@ -331,6 +331,65 @@ def _risk_events(conn) -> str:
         return f"风控事件查询失败: {e}"
 
 
+# ─── Phase 2: 动作工具桥接 (方案 v2.0 §4.3) ────────────────
+# 走 quant_bridge (TradingSelf.judge 审核 + 二次确认 + fail-closed),
+# Aris 规则引擎只传 (symbol, action, qty, rationale), 不接触 DB。
+
+def _quant_bridge():
+    """懒加载 quant_bridge 单例 (paper_trading 本地资产)。"""
+    from laap.paper_trading.quant_bridge import get_bridge
+    return get_bridge()
+
+
+def _quant_decide(symbol: str, action: str, qty: int = 0,
+                  rationale: str = "") -> str:
+    """交易决策建议 (审核, 不下单)。"""
+    try:
+        r = _quant_bridge().use_decide(symbol, action, qty, rationale)
+        if r.get("decision") == "approve":
+            head = "✅ 建议：可以"
+        elif r.get("decision") == "abstain":
+            head = "⚠️ 建议：观望（有顾虑）"
+        else:
+            head = "⛔ 建议：不执行"
+        reasons = "；".join(r.get("reasons", [])) or "无"
+        return f"{head} {symbol} {action} {qty or ''}\n  依据: {r.get('meaning','')}\n  顾虑: {reasons}"
+    except Exception as e:
+        return f"[决策不可用] {e}"
+
+
+def _quant_execute(symbol: str, action: str, qty: int,
+                   confirm_word: str = "") -> str:
+    """确认执行下单 (需二次确认 + judge 通过)。"""
+    try:
+        r = _quant_bridge().use_execute(
+            symbol=symbol, action=action, qty=qty, confirm_word=confirm_word)
+        if r.get("executed"):
+            return f"✅ 已执行 {symbol} {action} {qty}股: {r.get('status','')}"
+        if r.get("status") == "need_confirmation":
+            return "🔒 未执行：需要明确确认词（如 '确认执行'）"
+        if r.get("status") == "judge_blocked":
+            return f"⛔ 未执行：审核未通过 ({r.get('decision','')})：{r.get('reasons',[])}"
+        return f"⛔ 未执行：{r.get('status', r.get('error',''))}"
+    except Exception as e:
+        return f"[执行不可用] {e}"
+
+
+def _quant_close(symbol: str, qty: int = 0, confirm_word: str = "") -> str:
+    """平仓 (需审核 + 确认)。"""
+    try:
+        r = _quant_bridge().use_close(symbol, qty, confirm_word)
+        if r.get("executed"):
+            return f"✅ 已平仓 {symbol}: {r.get('status','')}"
+        if r.get("status") == "need_confirmation":
+            return "🔒 未平仓：需要明确确认词（如 '确认平仓'）"
+        if r.get("status") == "judge_blocked":
+            return f"⛔ 未平仓：审核未通过 ({r.get('decision','')})：{r.get('reasons',[])}"
+        return f"⛔ 未平仓：{r.get('status', r.get('error',''))}"
+    except Exception as e:
+        return f"[平仓不可用] {e}"
+
+
 # ─── 工具注册表 ────────────────────────────────────────────
 
 PAPER_TRADING_TOOLS: Dict[str, Dict[str, Any]] = {
@@ -356,6 +415,10 @@ PAPER_TRADING_TOOLS: Dict[str, Dict[str, Any]] = {
     "pt_lessons": {"fn": lambda: _run("lessons"), "desc": "交易教训"},
     "pt_net_value": {"fn": lambda: _run("net_value"), "desc": "净值/盈亏摘要"},
     "pt_risk_events": {"fn": lambda: _run("risk_events"), "desc": "风控拒绝事件"},
+    # Phase 2 新增 (方案 v2.0 §4.3): 动作工具 — 走 quant_bridge (TradingSelf 审核)
+    "pt_decide": {"fn": lambda symbol, action, qty=0, rationale="": _quant_decide(symbol, action, qty, rationale), "desc": "交易决策建议(审核,不下单)"},
+    "pt_execute": {"fn": lambda symbol, action, qty, confirm_word="": _quant_execute(symbol, action, qty, confirm_word), "desc": "确认执行下单(需二次确认)"},
+    "pt_close": {"fn": lambda symbol, qty=0, confirm_word="": _quant_close(symbol, qty, confirm_word), "desc": "平仓(需审核+确认)"},
 }
 
 

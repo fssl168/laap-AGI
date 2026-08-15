@@ -191,6 +191,32 @@ class RulesEngine:
         # 默认用户名
         intent["params"]["user_name"] = "朋友"
 
+        # ── Phase 2 新增: 量化交易参数提取 (方案 v2.0 §4.3) ──
+        # 从用户输入提取 symbol(股票代码/名称) + action(买/卖) + qty(股数),
+        # 供 pt_decide/pt_execute/pt_close 规则使用。
+        # 提取规则: A股6位代码 / "xx股票" / 常见名称; 不匹配时留空由工具兜底。
+        # 股票代码 (6 位数字, 排除纯日期等; 用 (?<!\d)(?!\d) 边界,
+        # 兼容中文上下文如 "600519要不要买")
+        m = re.search(r'(?<!\d)(6\d{5}|0\d{5}|3\d{5})(?!\d)', text)
+        if m:
+            intent["params"]["symbol"] = m.group(1)
+        # 买卖意图 (仅在明确动词时提取, 避免误判)
+        action = ""
+        if re.search(r'买(入)?\s*(不)?\s*$|买入|要不要买|值得买|可以买|买吧|就买', text):
+            action = "buy"
+        elif re.search(r'卖出|要不要卖|值得卖|卖吧|平仓|清仓', text):
+            action = "sell"
+        if action:
+            intent["params"]["action"] = action
+        # 股数 (如 "100股" / "买100")
+        m = re.search(r'(\d+)\s*(股|手)', text)
+        if m:
+            qty = int(m.group(1)) * (100 if m.group(2) == "手" else 1)
+            intent["params"]["qty"] = qty
+        # 确认词 (pt_execute 二次确认)
+        if re.search(r'确认执行|确认下单|确认平仓|下单吧|就买|买吧|执行', text):
+            intent["params"]["confirm_word"] = "确认执行"
+
         return intent
 
     # ─── 规则匹配 ────────────────────────────────────────
