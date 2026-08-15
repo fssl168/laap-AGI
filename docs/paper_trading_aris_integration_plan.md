@@ -2,9 +2,10 @@
 
 > 目标:让 Aris(数字生命体)成为交易业务的**一等参与者**——从"被动回答问题"
 > 升级为覆盖 **学习 / 识别 / 采集 / 使用 / 决策** 五能力的交易认知闭环。
-> 状态:修订稿(基于 v1.0 规划稿 + 2026-08-16 评审意见,待确认后分阶段实施)
+> 状态:✅ **Phase 1-3 已实施完成**（2026-08-16 起分阶段落地）
 > 日期:2026-08-16 (v2.0 修订)
 > 评审要点落实:pt_* 先例清理 / 认知总线枚举扩展 / 记忆双写一致性 / 命名空间决策
+> 实施记录:前置(pt_* 悬空清理 `f9020bb`) → P1 感知(`91f7722`) → P2 使用(`753b0e5`) → P3 管理(`f04d1be`)
 
 ---
 
@@ -430,5 +431,24 @@ python -c "from aris_brain.rules_defs import DEFAULT_RULES; from aris_brain.rule
 
 ---
 
-*本文档为修订稿，待确认 D1 决策点后按阶段实施。*
+## 10. 执行状态（2026-08-16 全部完成）
+
+| 阶段 | 状态 | commit | 交付 |
+|---|---|---|---|
+| 前置: pt_* 悬空清理 | ✅ | `f9020bb` | 3 悬空工具补齐 + 零悬空契约测试 |
+| P1 感知（学习+识别） | ✅ | `91f7722` | pt_lessons/signals/net_value/risk_events 工具+规则、QUANT_* 事件、教训双写 |
+| P2 使用（使用+决策） | ✅ | `753b0e5` | pt_decide/execute/close 动作工具（judge 审核+二次确认+fail-closed）、参数提取 |
+| P3 管理（治理+报告） | ✅ | `f04d1be` | pt_brief 简报、pt_evolution_audit 治理、日终认知快照 cron |
+| 收尾: cron 注册+配置+文档 | ✅ | 本轮 | Windows 计划任务 15:30 工作日、PAPER_TRADING_AUTO_EXECUTE=0 |
+
+**测试基线**: 765 → **800 passed / 0 failed**（Phase 1-3 共 +35 项测试）。
+
+**运行环境**:
+- cron: `LAAP_Memorize_Trading_Daily` 计划任务（工作日 15:30，调 hermes scripts/memorize_trading_daily.py）
+- 执行边界: `PAPER_TRADING_AUTO_EXECUTE=0`（只建议不下单，fail-closed 默认；二次确认词仍为硬门槛）
+- 语义记忆: 教训双写 + 交易日报共用写锁
+
+---
+
+*本文档为实施完成稿（Phase 1-3 全部落地）。*
 *设计原则:最小改动、复用既有契约、单向依赖、诚实定位、fail-closed 贯穿。*
