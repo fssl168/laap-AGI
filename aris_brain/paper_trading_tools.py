@@ -220,9 +220,9 @@ def _evolutions(conn) -> str:
     """演化记录。"""
     try:
         cursor = conn.execute("""
-            SELECT decision_id, symbol, action, pnl, hold_days, score
-            FROM evolutions 
-            ORDER BY ts DESC 
+            SELECT mutation_id, decision, reason, ts
+            FROM evolutions
+            ORDER BY ts DESC
             LIMIT 5
         """)
         rows = cursor.fetchall()
@@ -230,7 +230,7 @@ def _evolutions(conn) -> str:
             return "暂无演化记录"
         result = "最近5条演化:\n"
         for r in rows:
-            result += f"  {r[1]} {r[2]}: {r[3]:+.2f}, 持仓{r[4] or 0}天, 评分{r[5] or 0}\n"
+            result += f"  {r[0]} {r[1]}: {r[2] or ''}\n"
         return result
     except Exception as e:
         return f"演化查询失败: {e}"

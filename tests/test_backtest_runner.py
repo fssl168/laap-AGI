@@ -14,6 +14,7 @@ from laap.paper_trading.backtest_runner import (
     split_series,
     _run_ma_cross,
 )
+from laap.paper_trading.strategy import STRATEGY_PARAMS
 
 
 def test_split_series_time_ordered():
@@ -72,3 +73,174 @@ def test_oos_gate_passes_when_not_degraded():
     oos = {"sharpe_ratio": 0.9, "cumulative_return": 0.05}  # 0.9 >= 0.8
     ok, _ = runner.oos_gate(train, oos)
     assert ok is True
+
+
+# ════════════════════════════════════════════════════════════
+# Track ① 多空策略族（long_short）
+# ════════════════════════════════════════════════════════════
+
+def test_long_short_profits_in_downtrend():
+    """单调下跌 → 空头捕捉下跌收益（正收益）。"""
+    runner = BacktestRunner()
+    prices = [100.0 - i * 0.5 for i in range(60)]
+    lo = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=False)
+    ls = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=True)
+    assert ls["cumulative_return"] > 0  # 空头在下跌段赚钱
+    assert ls["cumulative_return"] > lo["cumulative_return"]  # 优于纯做多
+
+
+def test_long_short_long_side_intact_in_uptrend():
+    """单调上涨 → 多头仍捕捉上涨（long_short 不破坏多头）。"""
+    runner = BacktestRunner()
+    prices = [100.0 + i * 0.5 for i in range(60)]
+    lo = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=False)
+    ls = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=True)
+    assert ls["cumulative_return"] >= lo["cumulative_return"] - 0.02
+
+
+def test_long_short_off_equals_baseline():
+    """long_short=False 等价原策略（向后兼容）。"""
+    runner = BacktestRunner()
+    prices = [100.0 + i * 0.3 + ((i * 5) % 7 - 3) * 0.2 for i in range(120)]
+    a = runner.run_backtest(prices, STRATEGY_PARAMS)
+    b = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=False)
+    assert a == b
+
+
+def test_long_short_net_values_nonnegative_total():
+    """多空模式净值不为负（短仓 MTM 记账正确）。"""
+    runner = BacktestRunner()
+    prices = [100.0 - i * 0.5 for i in range(60)]
+    _m, nv = runner.run_backtest_values(prices, STRATEGY_PARAMS,
+                                        long_short=True)
+    assert len(nv) > 0
+    assert all(n.total >= 0 for n in nv)
+
+
+# ════════════════════════════════════════════════════════════
+# Track ① 指数择时（external_regime）
+# ════════════════════════════════════════════════════════════
+
+def test_external_regime_suppresses_longs():
+    """外部指数全程下行 → 长期做多不开仓（无亏损，净值持平）。"""
+    runner = BacktestRunner()
+    prices = [100.0 + i * 0.5 for i in range(60)]  # 个股上涨但指数下行
+    ext = [False] * len(prices)
+    plain = runner.run_backtest(prices, STRATEGY_PARAMS)
+    timed = runner.run_backtest(prices, STRATEGY_PARAMS, external_regime=ext)
+    assert timed["cumulative_return"] <= plain["cumulative_return"]
+    assert timed["cumulative_return"] >= -0.01  # 被择时挡住 → 接近 0
+
+
+def test_external_regime_enables_shorts():
+    """指数下行 + 多空 → 开空捕捉下跌（个股下跌时正收益）。"""
+    runner = BacktestRunner()
+    prices = [100.0 - i * 0.5 for i in range(60)]
+    ext = [False] * len(prices)
+    m = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=True,
+                            external_regime=ext)
+    assert m["cumulative_return"] > 0
+
+
+def test_external_regime_all_true_is_noop():
+    """external_regime 全 True = 无外部择时（no-op，等价性）。"""
+    runner = BacktestRunner()
+    prices = [100.0 + i * 0.3 + ((i * 5) % 7 - 3) * 0.2 for i in range(120)]
+    for ls in (False, True):
+        plain = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=ls)
+        timed = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=ls,
+                                    external_regime=[True] * len(prices))
+        assert plain == timed
+
+
+# ════════════════════════════════════════════════════════════
+# item 2：交易成本（佣金 + 印花税 + 滑点）
+# ════════════════════════════════════════════════════════════
+
+_COSTS = {"commission": 0.00025, "stamp": 0.0005, "slippage": 0.001}
+
+
+def test_costs_reduce_returns():
+    """带成本收益 <= 无成本收益（成本侵蚀）。"""
+    runner = BacktestRunner()
+    prices = [100.0 + i * 0.3 + ((i * 5) % 7 - 3) * 0.2 for i in range(200)]
+    for ls in (False, True):
+        plain = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=ls)
+        costly = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=ls,
+                                     costs=_COSTS)
+        assert costly["cumulative_return"] <= plain["cumulative_return"] + 1e-9
+
+
+def test_costs_zero_equals_none():
+    """全零成本等价无成本（向后兼容）。"""
+    runner = BacktestRunner()
+    prices = [100.0 + i * 0.3 + ((i * 5) % 7 - 3) * 0.2 for i in range(120)]
+    a = runner.run_backtest(prices, STRATEGY_PARAMS)
+    b = runner.run_backtest(prices, STRATEGY_PARAMS,
+                            costs={"commission": 0.0, "stamp": 0.0, "slippage": 0.0})
+    assert a == b
+
+
+def test_t1_guard_no_regression():
+    """T+1 entry_bar 守卫不改变日线粒度行为（防御性守卫，无回归）。
+    真正的 T+1 强约束在真实执行层 ledger.enforce_t1（test_paper_enhancements 4 项覆盖）。"""
+    runner = BacktestRunner()
+    prices = [100.0 - i * 0.4 for i in range(80)]
+    for ls in (False, True):
+        m = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=ls)
+        assert "cumulative_return" in m and "max_drawdown" in m
+
+
+# ════════════════════════════════════════════════════════════
+# M3：A 股涨跌停（涨停禁买 / 跌停禁卖）
+# ════════════════════════════════════════════════════════════
+
+def _up_then_crash_recover():
+    """买入持有后遇跌停日（-12%+）再反弹——验证跌停禁卖把持仓锁住。"""
+    up = [100.0 + i * 1.0 for i in range(20)] + \
+         [120.0 - i * 1.5 for i in range(8)]
+    rebound = [110.0 + i * 0.6 for i in range(8)]  # 8 天反弹触发买入
+    crash = [100.0]   # -12.4% 跌停日
+    recover = [104.0, 108.0, 112.0, 116.0]
+    return up + rebound + crash + recover
+
+
+def test_price_limit_blocks_sell_at_limit_down():
+    """跌停日禁卖 → 持仓被锁，随后反弹优于立即割肉。"""
+    runner = BacktestRunner()
+    prices = _up_then_crash_recover()
+    m_no = runner.run_backtest(prices, STRATEGY_PARAMS, price_limit=None)
+    m_lim = runner.run_backtest(prices, STRATEGY_PARAMS, price_limit=0.10)
+    assert m_lim["cumulative_return"] > m_no["cumulative_return"]
+
+
+def test_price_limit_runs_both_families():
+    """涨跌停建模在趋势/多空/均值回归下均可运行（无崩溃）。"""
+    runner = BacktestRunner()
+    prices = [100.0 + i * 0.3 + ((i * 5) % 7 - 3) * 0.2 for i in range(120)]
+    for style in ("trend", "mean_reversion"):
+        for ls in (False, True):
+            m = runner.run_backtest(prices, STRATEGY_PARAMS, long_short=ls,
+                                    price_limit=0.10, style=style)
+            assert "cumulative_return" in m
+
+
+# ════════════════════════════════════════════════════════════
+# M4：均值回归（独立信号家族）
+# ════════════════════════════════════════════════════════════
+
+def test_mean_reversion_buys_dip_and_profits():
+    """浅跌超卖 → 均值回归低位买入，反弹获利（contrarian 哲学）。"""
+    runner = BacktestRunner()
+    prices = [100.0 - i * 0.5 for i in range(20)] + [90.0 + i * 1.0 for i in range(40)]
+    m = runner.run_backtest(prices, STRATEGY_PARAMS, style="mean_reversion")
+    assert m["cumulative_return"] > 0
+
+
+def test_mean_reversion_differs_from_trend():
+    """均值回归与趋势是不同信号（同一序列上行为不同）。"""
+    runner = BacktestRunner()
+    prices = [100.0 - i * 0.5 for i in range(20)] + [90.0 + i * 1.0 for i in range(40)]
+    m_trend = runner.run_backtest(prices, STRATEGY_PARAMS, style="trend")
+    m_mr = runner.run_backtest(prices, STRATEGY_PARAMS, style="mean_reversion")
+    assert m_trend["cumulative_return"] != m_mr["cumulative_return"]

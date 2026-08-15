@@ -115,7 +115,8 @@ class TrueRSIEngine:
             return True, ""
 
         # 约束 1: 作用域限定 — 仅 laap/agi/ 下非保护文件
-        if not norm.startswith(self.ALLOWED_DIRS[0]):
+        # 用 in 兼容相对/绝对路径（NAS/Linux 为绝对路径）
+        if self.ALLOWED_DIRS[0] not in norm:
             return False, (
                 f"out of scope: {norm} "
                 f"(only {self.ALLOWED_DIRS[0]} and {self.SELF_FILE} allowed)")

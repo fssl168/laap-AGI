@@ -110,5 +110,7 @@ def test_extract_strategy_params_syntax_error():
 def test_load_baseline_params():
     from laap.paper_trading.param_extractor import load_baseline_params
     p = load_baseline_params()
-    assert "short" in p and "long" in p
-    assert p["short"] < p["long"]
+    # 阶段 2 重构：STRATEGY_PARAMS 从 {short, long} 扩展为 14 维多因子参数
+    assert "fast_ma" in p and "slow_ma" in p
+    assert p["fast_ma"] < p["slow_ma"]
+    assert len(p) >= 14

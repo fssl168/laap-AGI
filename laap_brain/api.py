@@ -58,6 +58,69 @@ _code_evolution_engine: Optional[Any] = None
 # 量化闭环: paper_trading 单例 (QuantEvolutionEngine + PaperDB), 懒创建。
 _quant_engine: Optional[Any] = None
 _quant_db: Optional[Any] = None
+# 交易自我（TradingSelf）：人格 × 自我模型 → 判断/审核 → 下达指令
+_trading_self: Optional[Any] = None
+# 量化日终闭环（PaperClosedLoop 单例，带 trading_self）
+_paper_loop: Optional[Any] = None
+# 每日管线调度器（M3，LAAP_QUANT_DAILY=1 启用）
+_quant_daily_scheduler: Optional[Any] = None
+
+
+def _get_trading_self() -> Optional[Any]:
+    """交易自我单例（懒创建）：人格 /v1/personality + EmergentSelfModel + UnifiedMemory。"""
+    global _trading_self
+    if _trading_self is None:
+        try:
+            from laap.paper_trading.trading_self import TradingSelf
+            from laap.agi.unified_memory import UnifiedMemory
+            _trading_self = TradingSelf(memory=UnifiedMemory())
+        except Exception as e:
+            logger.warning(f"TradingSelf lazy init failed: {e}")
+            _trading_self = None
+    return _trading_self
+
+
+def _get_paper_loop() -> Optional[Any]:
+    """量化日终闭环单例（懒创建）：PaperClosedLoop + trading_self。"""
+    global _paper_loop
+    if _paper_loop is None:
+        try:
+            from laap.paper_trading.paper_service import build_paper_closed_loop
+            _paper_loop = build_paper_closed_loop(
+                market=None, memory=None, trading_self=_get_trading_self())
+        except Exception as e:
+            logger.warning(f"PaperClosedLoop lazy init failed: {e}")
+            _paper_loop = None
+    return _paper_loop
+
+
+def _start_quant_daily_scheduler() -> Optional[Any]:
+    """启动每日管线调度器（M3，LAAP_QUANT_DAILY=1 显式开启，默认关闭）。
+
+    每日 tick：参数搜索 → 代码落回（M4 治理 + 交易自我审核）→ 日终执行。
+    """
+    global _quant_daily_scheduler
+    if _quant_daily_scheduler is not None:
+        return _quant_daily_scheduler
+    if os.environ.get("LAAP_QUANT_DAILY", "") != "1":
+        return None
+    try:
+        from laap.paper_trading.daily_pipeline import (
+            QuantDailyPipeline, QuantDailyScheduler)
+        qe = _get_quant_engine()
+        loop = _get_paper_loop()
+        if qe is None or loop is None:
+            return None
+        pipe = QuantDailyPipeline(qe, loop)
+        _quant_daily_scheduler = QuantDailyScheduler(
+            pipe, interval_seconds=int(
+                os.environ.get("LAAP_QUANT_DAILY_INTERVAL", "86400")))
+        _quant_daily_scheduler.start()
+        logger.info("QuantDailyScheduler started (LAAP_QUANT_DAILY=1)")
+    except Exception as e:
+        logger.warning(f"QuantDailyScheduler failed to start: {e}")
+        _quant_daily_scheduler = None
+    return _quant_daily_scheduler
 
 
 def _get_code_evolution_engine() -> Optional[Any]:
@@ -1027,8 +1090,23 @@ def _get_quant_db() -> Optional[Any]:
     return _quant_db
 
 
+def _get_llm_refine_fn() -> Optional[Any]:
+    """阶段 3.3：懒建 LLM 微调适配器（复用 HermesIntegration.llm_call）。
+
+    Hermes 不可用时返回 None（调用方降级为纯确定性参数搜索）。
+    """
+    try:
+        from laap.agi.hermes_integration import HermesIntegration
+        from laap.paper_trading.llm_refine import build_llm_refine_fn
+        hermes = HermesIntegration()
+        return build_llm_refine_fn(hermes.llm_call)
+    except Exception as e:
+        logger.warning(f"llm refine fn unavailable: {e}")
+        return None
+
+
 def _get_quant_engine() -> Optional[Any]:
-    """量化代码级进化引擎单例（懒创建 + attach 双守卫）。"""
+    """量化代码级进化引擎单例（懒创建 + attach 双守卫 + LLM 微调注入）。"""
     global _quant_engine
     if _quant_engine is not None:
         return _quant_engine
@@ -1044,7 +1122,9 @@ def _get_quant_engine() -> Optional[Any]:
         runner = BacktestRunner()
         db = _get_quant_db()
         _quant_engine = QuantEvolutionEngine(
-            engine, runner, price_series, db=db).attach()
+            engine, runner, price_series, db=db,
+            llm_fn=_get_llm_refine_fn(),
+            trading_self=_get_trading_self()).attach()
     except Exception as e:
         logger.warning(f"QuantEvolutionEngine lazy init failed: {e}")
         _quant_engine = None
@@ -1115,6 +1195,126 @@ async def handle_quant_evolve(request):
         return web.json_response({"error": "internal error"}, status=500)
 
 
+async def handle_quant_evolve_params(request):
+    """POST /v1/quant/evolve_params — 参数进化（确定性 / LLM 增强 + 可选自我审核落回）。
+
+    body: {method: grid|random|genetic, llm: bool, n_samples, seed,
+           population, generations, significance: bool, baseline_samples,
+           baseline_seed,
+           apply_code: bool,     # true 时把搜索最佳参数落回 strategy.py（走 M4 治理）
+           self_review: bool}    # apply_code 时是否启用交易自我审核（默认 true）
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    body = body or {}
+    method = body.get("method", "random")
+    if method not in ("grid", "random", "genetic"):
+        return web.json_response(
+            {"error": "method must be grid|random|genetic"}, status=400)
+    try:
+        qe = _get_quant_engine()
+        if qe is None:
+            return web.json_response({"error": "quant engine unavailable"}, status=500)
+        # 白名单透传（避免未知键灌进搜索方法）
+        kwargs = {k: body[k] for k in (
+            "n_samples", "seed", "population", "generations",
+            "significance", "baseline_samples", "baseline_seed")
+            if k in body and body[k] is not None}
+        if body.get("llm"):
+            result = qe.evolve_with_llm(
+                llm_fn=_get_llm_refine_fn(), method=method, **kwargs)
+        else:
+            result = qe.evolve_params(method=method, **kwargs)
+        # 可选：把搜索最佳参数落回代码（M4 治理 + 交易自我审核）
+        if body.get("apply_code") and result.get("best_params"):
+            apply = qe.apply_params_to_code(
+                result["best_params"], rationale=f"api:{method}", method=method,
+                self_review=body.get("self_review", True))
+            result["code_application"] = apply
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"quant_evolve_params failed: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_quant_self_status(request):
+    """GET /v1/quant/self/status — 交易自我状态（人格/自我模型/记忆）。"""
+    try:
+        ts = _get_trading_self()
+        if ts is None:
+            return web.json_response({"error": "trading self unavailable"}, status=500)
+        identity = ts.trading_identity()
+        payload = {
+            "identity": ts.identity_statement(),
+            "trading_identity": identity,
+            "personality_preset": (ts.personality or {}).get("preset_name", ""),
+            "personality_traits": (ts.personality or {}).get("traits", {}),
+            "self_model": ts.self_model.stats() if ts.self_model is not None else None,
+            "memory_lessons": len(ts._memory_lessons("")) if ts.memory is not None else 0,
+        }
+        return web.json_response(payload)
+    except Exception as e:
+        logger.warning(f"quant_self_status failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_daily_cycle(request):
+    """POST /v1/quant/daily_cycle — 日终闭环（真实K线→信号→交易自我审核→交易→净值）。
+
+    body: {symbols: [...], params: {...} 可选（缺省用 STRATEGY_PARAMS）}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    body = body or {}
+    symbols = body.get("symbols") or ["600519", "000001", "000858"]
+    params = body.get("params")
+    if params is None:
+        try:
+            from laap.paper_trading.strategy import STRATEGY_PARAMS
+            params = dict(STRATEGY_PARAMS)
+        except Exception:
+            return web.json_response({"error": "params required"}, status=400)
+    try:
+        loop = _get_paper_loop()
+        if loop is None:
+            return web.json_response({"error": "paper loop unavailable"}, status=500)
+        result = loop.run_daily_cycle(symbols, params, ohlcv_map=None)
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"quant_daily_cycle failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_apply_params(request):
+    """POST /v1/quant/apply_params — 把参数搜索结果落回代码（M4 治理 + 交易自我审核）。
+
+    body: {params: {...}, self_review: bool (默认 true), rationale: str}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    params = body.get("params")
+    if not isinstance(params, dict) or not params:
+        return web.json_response({"error": "params dict required"}, status=400)
+    try:
+        qe = _get_quant_engine()
+        if qe is None:
+            return web.json_response({"error": "quant engine unavailable"}, status=500)
+        result = qe.apply_params_to_code(
+            params, rationale=body.get("rationale", "api:apply_params"),
+            method="api", self_review=body.get("self_review", True))
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"quant_apply_params failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
 async def handle_quant_evolve_approve(request):
     """POST /v1/quant/evolve/approve — 人工批准并部署。"""
     try:
@@ -1165,6 +1365,148 @@ async def handle_quant_evolve_audit(request):
         return web.json_response({"error": "internal error"}, status=500)
 
 
+async def handle_quant_trades(request):
+    """GET /v1/quant/trades — 查询交易记录。"""
+    try:
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        symbol = request.query.get("symbol", "")
+        conn = db.conn()
+        try:
+            if symbol:
+                rows = conn.execute(
+                    "SELECT * FROM trades WHERE symbol=? ORDER BY entry_ts",
+                    (symbol,)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM trades ORDER BY entry_ts DESC LIMIT 100"
+                ).fetchall()
+        finally:
+            conn.close()
+        return web.json_response([dict(r) for r in rows])
+    except Exception as e:
+        logger.warning(f"quant_trades failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_net_values(request):
+    """GET /v1/quant/net_values — 查询净值序列 (ts/cash/equity/total，升序)。"""
+    try:
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        conn = db.conn()
+        try:
+            rows = conn.execute(
+                "SELECT ts, cash, equity, total FROM net_values ORDER BY ts ASC"
+            ).fetchall()
+        finally:
+            conn.close()
+        return web.json_response([dict(r) for r in rows])
+    except Exception as e:
+        logger.warning(f"quant_net_values failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_signals(request):
+    """GET /v1/quant/signals — 查询交易信号（可带 ?symbol= 过滤）。"""
+    try:
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        symbol = request.query.get("symbol", "")
+        conn = db.conn()
+        try:
+            if symbol:
+                rows = conn.execute(
+                    "SELECT * FROM signals WHERE symbol=? ORDER BY ts DESC LIMIT 100",
+                    (symbol,)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM signals ORDER BY ts DESC LIMIT 100").fetchall()
+        finally:
+            conn.close()
+        return web.json_response([dict(r) for r in rows])
+    except Exception as e:
+        logger.warning(f"quant_signals failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_orders(request):
+    """GET /v1/quant/orders — 查询订单。"""
+    try:
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        conn = db.conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM orders ORDER BY rowid DESC LIMIT 100").fetchall()
+        finally:
+            conn.close()
+        return web.json_response([dict(r) for r in rows])
+    except Exception as e:
+        logger.warning(f"quant_orders failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_outcomes(request):
+    """GET /v1/quant/outcomes — 查询结果回填（教训）。"""
+    try:
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        conn = db.conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM outcomes ORDER BY rowid DESC LIMIT 100").fetchall()
+        finally:
+            conn.close()
+        return web.json_response([dict(r) for r in rows])
+    except Exception as e:
+        logger.warning(f"quant_outcomes failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_decisions(request):
+    """GET /v1/quant/decisions — 查询决策留痕（POST 用于写入）。"""
+    try:
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        symbol = request.query.get("symbol", "")
+        conn = db.conn()
+        try:
+            if symbol:
+                rows = conn.execute(
+                    "SELECT * FROM decisions WHERE symbol=? ORDER BY ts DESC LIMIT 100",
+                    (symbol,)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM decisions ORDER BY ts DESC LIMIT 100").fetchall()
+        finally:
+            conn.close()
+        return web.json_response([dict(r) for r in rows])
+    except Exception as e:
+        logger.warning(f"quant_decisions failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_kline(request):
+    """GET /v1/quant/kline — 查询K线数据 (symbol + days 参数)。"""
+    try:
+        from laap.paper_trading.kline_source import load_price_series
+        symbol = request.query.get("symbol", "600519")
+        days = int(request.query.get("days", "120"))
+        data = load_price_series(symbol, days=days)
+        return web.json_response({"symbol": symbol, "days": days, "data": data})
+    except Exception as e:
+        logger.warning(f"quant_kline failed: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_root(request):
     return web.json_response({
         "name": "LAAP Brain API",
@@ -1183,6 +1525,26 @@ async def handle_root(request):
             "/v1/rsi_status": "RSI self-improvement status",
             "/v1/rsi_improve": "Apply RSI improvement",
             "/v1/rsi_full_cycle": "Run full RSI cycle",
+            "/v1/evo/audit": "Query evolution audit log",
+            "/v1/evo/status": "Evolution scheduler status",
+            "/v1/evo/rollback": "Rollback last evolution",
+            "/v1/evo/deploy": "Approve & deploy evolution mutation",
+            "/v1/quant/trades": "Paper trades",
+            "/v1/quant/net_values": "Paper net value series",
+            "/v1/quant/signals": "Paper signals",
+            "/v1/quant/orders": "Paper orders",
+            "/v1/quant/outcomes": "Paper outcomes/lessons",
+            "/v1/quant/decisions": "GET query / POST record paper decisions",
+            "/v1/quant/lessons": "Query lessons (optionally by lesson_type)",
+            "/v1/quant/self/status": "TradingSelf status",
+            "/v1/quant/daily_cycle": "Run daily paper cycle",
+            "/v1/quant/apply_params": "Apply evolved params to code (governed)",
+            "/v1/quant/evolve": "Run code-level evolution proposal",
+            "/v1/quant/evolve_params": "Parameter evolution (optionally LLM-refined)",
+            "/v1/quant/evolve/approve": "Approve evolution proposal",
+            "/v1/quant/evolve/reject": "Reject & rollback evolution",
+            "/v1/quant/evolve/audit": "Query evolution audit",
+            "/v1/quant/kline": "Query kline (symbol+days)",
             "/health": "Health check",
         },
         "frameworks": [
@@ -1240,10 +1602,21 @@ def create_app() -> web.Application:
     # 量化闭环端点 (paper_trading)
     app.router.add_post("/v1/quant/decisions", handle_quant_decision_record)
     app.router.add_get("/v1/quant/lessons", handle_quant_lessons)
+    app.router.add_get("/v1/quant/self/status", handle_quant_self_status)
+    app.router.add_post("/v1/quant/daily_cycle", handle_quant_daily_cycle)
+    app.router.add_post("/v1/quant/apply_params", handle_quant_apply_params)
     app.router.add_post("/v1/quant/evolve", handle_quant_evolve)
+    app.router.add_post("/v1/quant/evolve_params", handle_quant_evolve_params)
     app.router.add_post("/v1/quant/evolve/approve", handle_quant_evolve_approve)
     app.router.add_post("/v1/quant/evolve/reject", handle_quant_evolve_reject)
     app.router.add_get("/v1/quant/evolve/audit", handle_quant_evolve_audit)
+    app.router.add_get("/v1/quant/trades", handle_quant_trades)
+    app.router.add_get("/v1/quant/net_values", handle_quant_net_values)
+    app.router.add_get("/v1/quant/signals", handle_quant_signals)
+    app.router.add_get("/v1/quant/orders", handle_quant_orders)
+    app.router.add_get("/v1/quant/outcomes", handle_quant_outcomes)
+    app.router.add_get("/v1/quant/decisions", handle_quant_decisions)
+    app.router.add_get("/v1/quant/kline", handle_quant_kline)
     return app
 
 
@@ -1267,6 +1640,8 @@ def main():
 
     # M2 True RSI: 启动代码进化调度器 (LAAP_EVO_ENABLED=1 时)
     _start_evolution_scheduler()
+    # M3 量化: 每日管线调度器 (LAAP_QUANT_DAILY=1 时)
+    _start_quant_daily_scheduler()
 
     app = create_app()
     logger.info(f"LAAP Brain API starting on {host}:{port}")

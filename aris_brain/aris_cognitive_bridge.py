@@ -649,6 +649,26 @@ class ArisCognitiveBridge(CognitiveLoopMixin):
             self.state.needs_competence = min(1.0, self.state.needs_competence + 0.05)
         else:
             self.state.needs_competence = max(0.1, self.state.needs_competence - 0.05)
+        self._record_meta_session(tool_name, success)
+
+    def _record_meta_session(self, tool_name: str, success: bool) -> None:
+        """工具调用后自动记录元学习会话（coding/intent 等领域真实会话积累）。
+
+        JSON 持久化（meta_learning.save）+ SQLite（meta_sessions.db）双写；
+        由 LAAP_META_RECORD 环境变量控制（默认开启），失败静默不影响主流程。
+        """
+        if not self._laap_available:
+            return
+        if os.environ.get("LAAP_META_RECORD", "1") == "0":
+            return
+        meta = self._laap_modules.get("meta_learning")
+        if meta is None:
+            return
+        try:
+            from laap.agi.meta_session_db import record_to_sqlite
+            record_to_sqlite(meta, tool_name, success)
+        except Exception as e:
+            logger.debug(f"[MetaRecord] 会话记录失败: {e}")
 
     def get_cognitive_prefix(self) -> str:
         """
