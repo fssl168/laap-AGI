@@ -216,3 +216,40 @@ class TestIntegration:
         action, reason = runner.evaluate_signal(GOLDEN_UP, strategy="nope")
         assert action == "hold"
         assert "unknown strategy" in reason
+
+
+class TestPaperReplay:
+    """模板策略可通过 paper_replay 逐 bar 回测验证（M6 验证路径）。"""
+
+    def _trend_closes(self):
+        closes = []
+        for seg in range(3):
+            base = closes[-1] if closes else 10.0
+            closes += [base + i * 0.3 for i in range(25)]
+            closes += [closes[-1] - i * 0.2 for i in range(10)]
+        return closes
+
+    def test_replay_strategy_route(self):
+        from laap.paper_trading.paper_replay import PaperReplay, ohlcv_from_closes
+        closes = self._trend_closes()
+        ohlcv = ohlcv_from_closes(closes)
+        r = PaperReplay(strategy="golden_cross").replay("600519", closes, ohlcv)
+        assert r["n_trades"] >= 1
+        assert r["metrics"]["cumulative_return"] > 0
+
+    def test_replay_default_is_multi_factor(self):
+        from laap.paper_trading.paper_replay import PaperReplay, ohlcv_from_closes
+        closes = self._trend_closes()
+        ohlcv = ohlcv_from_closes(closes)
+        # 默认（不传 strategy）行为不变：合法返回、metrics 结构完整
+        r = PaperReplay().replay("600519", closes, ohlcv)
+        assert "metrics" in r and "signals" in r and "totals" in r
+
+    def test_replay_unknown_strategy_fail_closed(self):
+        from laap.paper_trading.paper_replay import PaperReplay, ohlcv_from_closes
+        closes = self._trend_closes()
+        ohlcv = ohlcv_from_closes(closes)
+        r = PaperReplay(strategy="nope").replay("600519", closes, ohlcv)
+        # 未知策略 → 每 bar hold → 0 交易，不抛错
+        assert r["n_trades"] == 0
+        assert r["metrics"]["cumulative_return"] == 0.0

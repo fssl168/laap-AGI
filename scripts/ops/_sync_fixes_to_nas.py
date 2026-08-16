@@ -31,6 +31,7 @@ FILES = [
     "laap/paper_trading/daily_pipeline.py",
     "laap/paper_trading/indicators.py",
     "laap/paper_trading/strategy_templates.py",
+    "laap/paper_trading/paper_replay.py",
     # 测试
     "tests/test_quant_bridge_phase1.py",
     "tests/test_quant_bridge_phase2.py",
