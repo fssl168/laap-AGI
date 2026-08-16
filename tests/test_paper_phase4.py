@@ -11,7 +11,6 @@ import pytest
 
 from laap.paper_trading.db import PaperDB
 from laap.paper_trading.paper_service import PaperClosedLoop
-from laap.paper_trading.market_source import StubMarketSource
 from laap.paper_trading.models import DecisionAction
 from laap.paper_trading import strategy
 
@@ -20,7 +19,16 @@ from laap.paper_trading import strategy
 def loop(tmp_path):
     from laap.agi.unified_memory import UnifiedMemory
     db = PaperDB(db_path=str(tmp_path / "pt.db"))
-    market = StubMarketSource(base_prices={"600519": 100.0})
+
+    class _FakeLiveMarket:
+        """模拟实时行情（非降级），run_daily_cycle 集成测试用。
+
+        fail-closed 契约下 stub 成交会被拒绝，因此测试须模拟行情可用。
+        """
+        def get_price(self, symbol, ts=None):
+            return 100.0, {"source": "akshare", "used_fallback": False}
+
+    market = _FakeLiveMarket()
     memory = UnifiedMemory()
     return PaperClosedLoop(db, market, memory, initial_cash=1_000_000.0, enforce_t1=False)
 

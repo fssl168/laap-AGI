@@ -42,17 +42,24 @@ async def test_chat_empty_messages_rejected():
 
 @pytest.mark.asyncio
 async def test_chat_too_many_messages_rejected():
-    """超过 50 条消息应返回 400。"""
+    """超过 100 条消息: 截断到最近 100 条(保留 system), 不再硬 400。
+
+    2026-08-16: 由\"拒绝\"改为\"截断\"——Hermes QQ 长会话历史持续增长,
+    硬拒导致 provider failed after retries (errors.log: too many messages)。
+    防护语义保留(超大输入仍拒), 合法长会话可用。
+    """
     app = create_app()
     server = TestServer(app)
     client = TestClient(server)
     await client.start_server()
     try:
-        many = [{"role": "user", "content": "hi"}] * 51
+        # 105 条非 system 消息 → 应截断而非 400
+        many = [{"role": "user", "content": "hi"}] * 105
         resp = await client.post("/v1/chat/completions", json={"messages": many})
-        assert resp.status == 400
+        assert resp.status == 200, f"期望截断后 200, 实际 {resp.status}"
+        # 消息太少不触发截断逻辑, 但返回结构完整
         data = await resp.json()
-        assert "too many" in data.get("error", "")
+        assert "choices" in data
     finally:
         await client.close()
 

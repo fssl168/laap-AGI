@@ -395,6 +395,46 @@ def test_parallel_calls_for_multiple_entities():
 
 @pytest.mark.asyncio
 async def test_api_returns_tool_calls():
+    """非 laap-core 模型: tool_router 路由工具 (get_stock_quote)。
+
+    2026-08-16 行为约定 (用户确认): laap-core 本体规则未命中时走 LAAP LLM 兜底,
+    不路由工具 (见 laap_brain/api.py L645-658 注释)。tool_router 仅对非 laap-core
+    模型生效 — 本测试用显式非 laap-core 模型验证工具路由链路。
+    """
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from laap_brain.api import create_app
+
+    app = create_app()
+    server = TestServer(app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "laap-rules",
+                "messages": [{"role": "user", "content": "查一下贵州茅台股价"}],
+                "tools": STOCK_TOOLS,
+            },
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        msg = data["choices"][0]["message"]
+        # 工具路由链路 (非 laap-core): 期望 tool_calls
+        assert data["choices"][0]["finish_reason"] == "tool_calls"
+        assert msg["content"] is None
+        assert msg["tool_calls"][0]["function"]["name"] == "get_stock_quote"
+        assert json.loads(msg["tool_calls"][0]["function"]["arguments"])["symbol"] == "600519"
+        assert data["engine"] == "agi:tool_router"
+        assert data["tool_decision"]["threshold_used"] >= 1
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_api_laap_core_no_tool_calls_falls_back_llm():
+    """laap-core 本体: 规则未命中时不路由工具, 走 LLM 兜底 (用户确认行为)。"""
     from aiohttp.test_utils import TestClient, TestServer
 
     from laap_brain.api import create_app
@@ -415,12 +455,10 @@ async def test_api_returns_tool_calls():
         assert resp.status == 200
         data = await resp.json()
         msg = data["choices"][0]["message"]
-        assert data["choices"][0]["finish_reason"] == "tool_calls"
-        assert msg["content"] is None
-        assert msg["tool_calls"][0]["function"]["name"] == "get_stock_quote"
-        assert json.loads(msg["tool_calls"][0]["function"]["arguments"])["symbol"] == "600519"
-        assert data["engine"] == "agi:tool_router"
-        assert data["tool_decision"]["threshold_used"] >= 1
+        # laap-core: 不产生 tool_calls (走 LLM 兜底)
+        assert data["choices"][0]["finish_reason"] != "tool_calls"
+        assert msg.get("tool_calls") is None
+        assert data.get("engine", "").startswith(("llm:", "rules:"))
     finally:
         await client.close()
 

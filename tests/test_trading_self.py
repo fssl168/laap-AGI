@@ -213,7 +213,8 @@ def test_issue_buy_executes_with_self_rationale(loop, self_model, memory):
     decision = ts.judge("buy", symbol="600519", qty=100, price=100.0,
                         cash=loop.ledger.cash)
     assert decision["verdict"] == "approve"
-    r = ts.issue(loop, "buy", "600519", 100, 100.0, decision)
+    r = ts.issue(loop, "buy", "600519", 100, 100.0, decision,
+                 allow_fallback=True)  # stub 测试行情显式允许
     assert r["trade_id"]
     # 决策留痕 rationale 应含 [self] 主体声明 + [benefit]
     conn = loop.db.conn()
@@ -229,7 +230,8 @@ def test_issue_sell_closes_and_reflects(loop, self_model, memory):
     # 先买入
     buy_d = ts.judge("buy", symbol="600519", qty=100, price=100.0,
                      cash=loop.ledger.cash)
-    ts.issue(loop, "buy", "600519", 100, 100.0, buy_d)
+    ts.issue(loop, "buy", "600519", 100, 100.0, buy_d,
+             allow_fallback=True)  # stub 测试行情显式允许
     assert len(loop.ledger.open_positions()) == 1
 
     sell_d = ts.judge("sell", symbol="600519")

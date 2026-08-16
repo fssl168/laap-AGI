@@ -105,13 +105,14 @@ def test_use_execute_needs_confirmation(monkeypatch):
     """无确认词 → need_confirmation (fail-closed)。"""
     from laap.paper_trading.quant_bridge import get_bridge
     b = get_bridge()
+    monkeypatch.setattr(b, "_is_trading_day", lambda: True)  # 交易日, 过交易日门
     r = b.use_execute(symbol="600519", action="buy", qty=100, confirm_word="")
     assert r["status"] == "need_confirmation"
     assert r["executed"] is False
 
 
 def test_use_execute_judge_blocked(monkeypatch):
-    """确认词给了但 judge 非 approve → 拒绝。"""
+    """确认词给了 + 行情可用但 judge 非 approve → 拒绝。"""
     from laap.paper_trading.quant_bridge import get_bridge
     b = get_bridge()
 
@@ -120,8 +121,46 @@ def test_use_execute_judge_blocked(monkeypatch):
             return {"verdict": "reject", "meaning": "", "benefit": "",
                     "reasons": ["风险过高"]}
     monkeypatch.setattr(b, "_get_trading_self", lambda cls: _FakeTS())
+    monkeypatch.setattr(b, "_is_trading_day", lambda: True)  # 交易日
+
+    # 行情可用 (真实源, 非降级) → 能走到 judge 层
+    class _FakeLoop:
+        class _Market:
+            def get_price(self, symbol, ts=None):
+                return 100.0, {"source": "akshare", "used_fallback": False}
+        market = _Market()
+        ledger = type("L", (), {"cash": 1_000_000.0})()
+
+    monkeypatch.setattr(b, "_get_loop", lambda: _FakeLoop())
     r = b.use_execute(symbol="600519", action="buy", qty=100, confirm_word="确认执行")
     assert r["status"] == "judge_blocked"
+    assert r["executed"] is False
+
+
+def test_use_execute_market_fallback_blocked(monkeypatch):
+    """实时行情降级(stub) → fail-closed 拒绝成交 (market_fallback), 不经过 judge。"""
+    from laap.paper_trading.quant_bridge import get_bridge
+    b = get_bridge()
+
+    # judge 即使 approve 也不该被调用 (fail-closed 优先)
+    class _FakeTS:
+        def judge(self, *a, **k):
+            raise AssertionError("fail-closed 应优先于 judge, judge 不应被调用")
+    monkeypatch.setattr(b, "_get_trading_self", lambda cls: _FakeTS())
+    monkeypatch.setattr(b, "_is_trading_day", lambda: True)  # 交易日
+
+    # 行情降级 (stub / used_fallback=True)
+    class _FakeLoop:
+        class _Market:
+            def get_price(self, symbol, ts=None):
+                return 100.1394, {"source": "stub", "used_fallback": True,
+                                  "fallback_reason": "live sources down"}
+        market = _Market()
+        ledger = type("L", (), {"cash": 1_000_000.0})()
+
+    monkeypatch.setattr(b, "_get_loop", lambda: _FakeLoop())
+    r = b.use_execute(symbol="600519", action="buy", qty=100, confirm_word="确认执行")
+    assert r["status"] == "market_fallback"
     assert r["executed"] is False
 
 

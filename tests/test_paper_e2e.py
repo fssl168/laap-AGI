@@ -32,7 +32,8 @@ def test_memory_closed_loop_e2e(tmp_path):
     # 第 1 天：决策买入 → 下单（注入记忆）→ 成交
     r1 = loop.decide_and_trade(
         "600519", DecisionAction.BUY, 100, 100.0,
-        rationale="放量突破 20 日线", expected="+5%", risk_note="仓位≤5%")
+        rationale="放量突破 20 日线", expected="+5%", risk_note="仓位≤5%",
+        allow_fallback=True)  # stub 测试行情显式允许
     trade_id = r1["trade_id"]
     decision_id = r1["decision_id"]
     assert trade_id and decision_id

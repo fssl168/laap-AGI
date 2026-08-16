@@ -97,7 +97,8 @@ def test_decide_and_trade_with_fee(tmp_path):
                            initial_cash=100_000.0, enforce_t1=False,
                            fee_model=_fee())
     res = loop.decide_and_trade("600519", DecisionAction.BUY, quantity=100,
-                                trigger_price=100.0, rationale="news")
+                                trigger_price=100.0, rationale="news",
+                                allow_fallback=True)  # stub 测试行情显式允许
     # fill_price = 成交价（滑点后）；现金 = 初始 − 成交额 − 佣金
     assert res["trade_id"]
     fill = res["fill_price"]

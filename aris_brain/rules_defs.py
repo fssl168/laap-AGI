@@ -456,7 +456,7 @@ DEFAULT_RULES: List[Rule] = [
             ),
             Rule(
                 name="pt_backtest_run",
-                patterns=["跑回测", "运行回测", "backtest", "回测分析", "测试策略"],
+                patterns=["跑回测", "跑个回测", "运行回测", "backtest", "回测分析", "测试策略"],
                 intent="pt_backtest_run",
                 description="对指定策略运行回测",
                 steps=[
@@ -466,7 +466,7 @@ DEFAULT_RULES: List[Rule] = [
             ),
             Rule(
                 name="pt_risk_check",
-                patterns=["风控检查", "风险检查", "risk check", "风控状态", "检查风险"],
+                patterns=["风控检查", "检查风控", "风险检查", "risk check", "风控状态", "检查风险"],
                 intent="pt_risk_check",
                 description="检查paper_trading风控状态",
                 steps=[
@@ -535,6 +535,37 @@ DEFAULT_RULES: List[Rule] = [
                 ],
                 output_template="{result}",
             ),
+            # ── 2026-08-16: 补缺规则——pt_orders/pt_trades/pt_evolve 原无规则 ──
+            Rule(
+                name="pt_orders_rule",
+                patterns=["订单列表", "订单记录", "最近订单", "有订单吗", "orders", "order list"],
+                intent="pt_orders",
+                description="查询最近订单（识别能力）",
+                steps=[
+                    RuleStep(tool="pt_orders", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_trades_rule",
+                patterns=["成交列表", "成交记录", "最近成交", "成交明细", "trades", "trade list", "成交情况", "交易记录", "交易明细", "我的交易"],
+                intent="pt_trades",
+                description="查询最近成交（识别能力）",
+                steps=[
+                    RuleStep(tool="pt_trades", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            Rule(
+                name="pt_evolve_rule",
+                patterns=["演化记录", "演化历史", "进化记录", "参数演化", "evolutions", "演化明细"],
+                intent="pt_evolve",
+                description="查询演化记录（演化能力）",
+                steps=[
+                    RuleStep(tool="pt_evolve", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
             Rule(
                 name="pt_portfolio_rule",
                 patterns=["当前持仓", "我的持仓", "持仓情况", "有哪些持仓", "仓位", "positions", "portfolio"],
@@ -589,7 +620,7 @@ DEFAULT_RULES: List[Rule] = [
             ),
             Rule(
                 name="pt_evolution_rule",
-                patterns=["进化提案", "策略改进", "进化审计", "有哪些提案", "看下提案", "evolution audit", "进化治理"],
+                patterns=["进化提案", "策略改进", "进化审计", "演化审计", "有哪些提案", "看下提案", "evolution audit", "进化治理"],
                 intent="pt_evolution_audit",
                 description="进化治理提案（管理/治理能力）",
                 steps=[
@@ -603,13 +634,13 @@ DEFAULT_RULES: List[Rule] = [
             # 注意: 不能含裸 "paper"（会劫持论文规则），用完整词 "paper_trading"/"trading"。
             Rule(
                 name="pt_capability_rule",
-                patterns=["paper_trading", "trading", "有哪些工具", "有什么功能", "能力清单", "你会什么", "你能做什么", "paper trading", "模拟交易", "纸面交易"],
+                patterns=["有哪些工具", "有什么功能", "能力清单", "你会什么", "你能做什么", "所有功能", "功能列表", "功能清单", "支持什么"],
                 intent="pt_capability",
-                description="paper_trading 能力清单",
+                description="paper_trading 能力清单（按分类完整列出）",
                 steps=[
                     RuleStep(tool="pt_health", params={}, output_key="health"),
                 ],
-                output_template="paper_trading 支持：查看账户/持仓/信号/订单/成交/净值/绩效、策略列表、回测、风控检查、风控事件、交易教训、交易决策（pt_decide）、确认执行下单（pt_execute，需二次确认）、平仓（pt_close）、每日简报（pt_brief）、演化治理（pt_evolution_audit）。\n\n直接说具体指令即可，例如：\"查看持仓\"、\"列出信号\"、\"跑个回测\"、\"确认执行买入 600114 100股\"。\n\n当前系统状态：\n{health}",
+                output_template="🛠️ 交易能力（paper_trading 直连）\n\n功能 | 你说什么 | 我做什么\n查账户 | \"查账户\" / \"账户列表\" | 显示账户信息（单系统单账户）\n查持仓 | \"查看持仓\" / \"我的持仓\" | 当前持仓明细\n看信号 | \"列出信号\" / \"有哪些信号\" | 最近 10 条交易信号\n看订单 | \"订单列表\" | 最近 10 条订单\n看成交 | \"成交记录\" | 最近 10 笔成交\n净值绩效 | \"绩效报告\" / \"盈亏\" | 净值曲线、累计盈亏\n跑回测 | \"跑个回测\" | 策略回测\n风控检查 | \"检查风控\" / \"risk check\" | 挂单数+今日交易数\n系统健康 | \"系统健康\" / \"health\" | 各表记录数、链路状态\n交易决策 | \"帮我看看买什么\" | 规则引擎决策（pt_decide）\n确认下单 | \"确认执行买入 600519\" | 实时取价 → 风控校验 → 下单\n平仓 | \"平掉 XX\" | 卖出持仓\n每日简报 | \"简报\" | 当日交易摘要\n演化治理 | \"演化审计\" | 参数演化记录审查\n\n🧠 认知能力\n记忆：我的记忆层级会随对话沉淀，记得你（丘伟枫）和我们的协作\n情感：有需求（胜任/自主/关联/确定性/意义）和情感状态，每次对话会更新\n自我认知：知道自己是 Aris，认知循环计数在持续积累\n演化：Recursive Self-Improvement——能对自己的交易参数做演化改进\n\n⚠️ 边界\n我是规则引擎驱动的\"哑模型\"：不走 Hermes 的工具循环，所以文件操作、网页搜索、代码执行这类 Hermes 能力我不具备。但交易这条线是我的主场——直接说指令就行，比如\"查看持仓\"。\n\n当前系统状态：\n{health}",
                 min_confidence=0.05,
             ),
 ]
