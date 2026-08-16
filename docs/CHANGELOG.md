@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- [新功能] MCP 工具列表新增 paper_trading 量化闭环工具：21 个 `laap_quant_*`（薄封装 `/v1/quant/*`：持仓/成交/信号/订单/净值/决策/教训/风控拒绝/新闻判定/K线 等查询 + 新闻扫描/日终闭环/参数进化/部署审批等动作），可选 `LAAP_API_KEY` Bearer 鉴权透传；危险开关默认关闭（`news_scan auto_order=False` fail-closed）
 - [新功能] news-intel 闭环：新闻数据获取（akshare 双源兜底+重试）→ LLM+RSI 判定（fail-closed）→ 研报策略（含费预算）→ 风控门（R1-R5）→ 自动下单（ledger 真实扣费）→ 留痕（news_items/verdicts/rejections/summaries 表 + 5 条 API 路由）
 - [新功能] Tushare 数据源接入：K线链启用 tushare（db→tushare→akshare→synthetic）；新闻链新增 `tushare` 快讯源（news API，TUSHARE_NEWS_SRC/LOOKBACK_HOURS 可调，需单独权限，失败 fail-closed 回退）
 - [新功能] NewsSignalWorker 盘中轮询（LAAP_NEWS_INTRADAY=1 启用，B5 时段 + B6 新鲜度校验 + D1 去重控成本）

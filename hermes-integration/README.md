@@ -14,6 +14,7 @@
   - `POST /v1/recall_memory` — 召回 LAAP 记忆
   - `POST /v1/reflect` — 反思并更新状态
 - 新建 `mcp_server/laap_mcp_server.py`：LAAP 的 MCP 服务器（stdio/SSE 双模式）
+- MCP 工具列表包含 paper_trading 量化闭环工具（21 个 `laap_quant_*`，薄封装 `/v1/quant/*`：查询/新闻判定/新闻扫描/日终闭环/参数进化/部署审批；危险开关默认关闭 fail-closed，`LAAP_API_KEY` 配置后自动带 Bearer 鉴权）
 
 ### Hermes 侧
 
