@@ -8,8 +8,23 @@ from laap.paper_trading.news_intel import (
     NewsItem, StockProfile, ResearchReport,
     fetch_stock_news, fetch_stock_profile, fetch_research_reports,
     summarize_news, _inject_ak, _cache_get, _cache_put, _CACHE,
-    _fmt_published,
+    _fmt_published, _extract_report_symbol,
 )
+
+
+class TestExtractReportSymbol:
+    """研报标题 → 股票代码提取（离线确定性）。"""
+
+    def test_company_report(self):
+        assert _extract_report_symbol("贵州茅台(600519)业绩点评") == "600519"
+
+    def test_industry_report_no_code(self):
+        assert _extract_report_symbol("白酒行业深度报告：格局优化") == ""
+
+    def test_other_code_positions(self):
+        assert _extract_report_symbol("利扬芯片(920125)行业领先") == "920125"
+        assert _extract_report_symbol("无代码标题") == ""
+        assert _extract_report_symbol("") == ""
 
 
 class TestFmtPublished:
