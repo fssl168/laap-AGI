@@ -66,6 +66,7 @@ FILES = [
     "docs/paper_trading_2track_replay_eval.md",
     "docs/paper_trading_2track_stock_replay.md",
     "docs/paper_trading_veto_counterfactual.md",
+    "docs/paper_trading_e2e_report.md",
     # 配置
     ".env.example",
 ]
