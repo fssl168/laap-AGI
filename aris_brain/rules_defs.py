@@ -665,6 +665,17 @@ DEFAULT_RULES: List[Rule] = [
                 ],
                 output_template="{result}",
             ),
+            # ── 2026-08-16: 行业板块研报规则 ──
+            Rule(
+                name="pt_sector_reports_rule",
+                patterns=["行业研报", "板块研报", "行业板块研报", "研报", "板块研报", "行业报告", "sector report", "行业分析报告", "板块报告"],
+                intent="pt_sector_reports",
+                description="查询行业/板块研报（自选股池聚合）",
+                steps=[
+                    RuleStep(tool="pt_sector_reports", params={"sector": "{sector}"}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
 ]
 
 

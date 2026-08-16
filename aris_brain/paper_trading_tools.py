@@ -66,6 +66,8 @@ def _run(action: str, **kwargs) -> str:
             return _watchlist()
         elif action == "profile":
             return _profile(kwargs.get("symbol", ""))
+        elif action == "sector_reports":
+            return _sector_reports(kwargs.get("sector", ""))
         else:
             return f"未知操作: {action}"
     except Exception as e:
@@ -399,6 +401,60 @@ def _profile(symbol: str = "") -> str:
         return f"个股资料查询失败: {e}"
 
 
+def _sector_reports(sector: str = "") -> str:
+    """行业/板块研报: 对自选股池拉研报, 按板块关键词过滤聚合。
+
+    真实环境 (用户机器, akshare 可达): fetch_research_reports 多源链
+    (eastmoney→cls→sina) 返回个股研报; 按标题/机构含板块关键词过滤。
+    沙箱/离线: 源失败 → used_fallback, 返回提示 (fail-closed, 不伪造)。
+    """
+    try:
+        if not sector or str(sector).strip() in ("{sector}", ""):
+            return "请提供行业/板块名，如 '列出 白酒 行业板块研报'"
+        sector_kw = str(sector).strip()
+        from laap.paper_trading.news_intel import fetch_research_reports
+        import os
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(LAAP_ROOT, ".env"))
+        raw = os.environ.get("STOCK_LIST", "") or ""
+        codes = [c.strip() for c in raw.split(",") if c.strip()]
+        if not codes:
+            return "自选股池为空（.env 未配置 STOCK_LIST），无法聚合行业研报"
+
+        matched = []
+        fallback = False
+        for code in codes:
+            try:
+                reports, meta = fetch_research_reports(code, max_results=5)
+                if meta.get("used_fallback"):
+                    fallback = True
+                for r in reports:
+                    title = (r.title or "")
+                    org = (r.org or "")
+                    if sector_kw in title or sector_kw in org or sector_kw in (r.rating or ""):
+                        matched.append({"symbol": code, "title": title,
+                                        "org": org, "rating": r.rating,
+                                        "date": r.date})
+            except Exception:
+                continue  # 单只失败跳过, 不中断
+
+        if not matched:
+            note = "（数据源降级/不可用）" if fallback else ""
+            return f"自选股池未找到与「{sector_kw}」相关的研报{note}"
+
+        lines = [f"📑 「{sector_kw}」板块研报（自选股池聚合, {len(matched)} 条）:"]
+        for m in matched[:10]:
+            lines.append(f"  • {m['symbol']} {m['title'][:45]}")
+            if m.get("org"):
+                lines.append(f"    {m['org']}{' ' + m['rating'] if m['rating'] else ''}"
+                             f"{' (' + str(m['date'])[:10] + ')' if m['date'] else ''}")
+        if fallback:
+            lines.append("  ⚠️ 部分数据源降级（stub/缓存）")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"行业研报查询失败: {e}"
+
+
 # ─── Phase 1 新增: 学习/识别类只读工具 (方案 v2.0 §4.2.1) ─────
 
 def _lessons(conn) -> str:
@@ -588,6 +644,7 @@ PAPER_TRADING_TOOLS: Dict[str, Dict[str, Any]] = {
     "pt_evolution_audit": {"fn": lambda: _run("evolution_audit"), "desc": "进化治理提案"},
     "pt_watchlist": {"fn": lambda: _run("watchlist"), "desc": "列出我的自选股"},
     "pt_profile": {"fn": lambda symbol: _run("profile", symbol=symbol), "desc": "个股资料查询"},
+    "pt_sector_reports": {"fn": lambda sector: _run("sector_reports", sector=sector), "desc": "行业/板块研报"},
 }
 
 

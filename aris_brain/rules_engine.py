@@ -219,6 +219,17 @@ class RulesEngine:
         # 确认词 (pt_execute 二次确认)
         if re.search(r'确认执行|确认下单|确认平仓|下单吧|执行', text):
             intent["params"]["confirm_word"] = "确认执行"
+        # 行业/板块名 (pt_sector_reports): 取"研报/报告"前的板块词
+        # 如 "列出 白酒 行业板块研报" → sector="白酒"; "医药研报" → "医药"
+        m = re.search(r'([\u4e00-\u9fffA-Za-z]{2,12}?)\s*(?:行业板块|板块|行业)?\s*研报', text)
+        if m:
+            sector = m.group(1)
+            # 清理引导词
+            for junk in ("列出", "看看", "查一下", "查询", "我要", "给我", "的"):
+                if sector.startswith(junk):
+                    sector = sector[len(junk):].strip()
+            if sector:
+                intent["params"]["sector"] = sector
 
         return intent
 
