@@ -7,7 +7,33 @@ from laap.paper_trading import news_intel
 from laap.paper_trading.news_intel import (
     NewsItem, StockProfile, ResearchReport,
     fetch_stock_news, fetch_stock_profile, fetch_research_reports,
-    summarize_news, _inject_ak, _cache_get, _cache_put, _CACHE)
+    summarize_news, _inject_ak, _cache_get, _cache_put, _CACHE,
+    _fmt_published,
+)
+
+
+class TestFmtPublished:
+    """发布时间归一化（publish_time 对齐基础，离线确定性）。"""
+
+    def test_unix_timestamp(self):
+        # 1786890948 ≈ 2026-08-16（新浪 ctime 格式）
+        out = _fmt_published(1786890948)
+        assert out.startswith("2026-08-16")
+
+    def test_timestamp_string(self):
+        out = _fmt_published("1786890948")
+        assert out.startswith("2026-08-16")
+
+    def test_datetime_string_unchanged(self):
+        assert _fmt_published("2026-08-15 10:11:51") == "2026-08-15 10:11:51"
+
+    def test_t_separator(self):
+        assert _fmt_published("2026-08-15T10:11:51") == "2026-08-15 10:11:51"
+
+    def test_empty_and_garbage(self):
+        assert _fmt_published("") == ""
+        assert _fmt_published(None) == ""
+        assert _fmt_published("not-a-date") == "not-a-date"
 
 
 class _StubAk:

@@ -32,6 +32,10 @@ FILES = [
     "laap/paper_trading/indicators.py",
     "laap/paper_trading/strategy_templates.py",
     "laap/paper_trading/paper_replay.py",
+    "laap/paper_trading/news_gate.py",
+    "laap/paper_trading/news_verifier.py",
+    "laap/paper_trading/news_intel.py",
+    "laap/paper_trading/news_pipeline.py",
     # 测试
     "tests/test_quant_bridge_phase1.py",
     "tests/test_quant_bridge_phase2.py",
@@ -48,6 +52,7 @@ FILES = [
     "tests/test_indicators.py",
     "tests/test_strategy_templates.py",
     "tests/test_daily_pipeline.py",
+    "tests/test_news_gate.py",
     # 文档
     "docs/paper_trading_aris_integration_plan.md",
     "docs/paper_trading_aris_usage.md",
