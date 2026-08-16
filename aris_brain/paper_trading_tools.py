@@ -68,6 +68,8 @@ def _run(action: str, **kwargs) -> str:
             return _profile(kwargs.get("symbol", ""))
         elif action == "sector_reports":
             return _sector_reports(kwargs.get("sector", ""))
+        elif action == "news":
+            return _news(kwargs.get("symbol", ""))
         else:
             return f"未知操作: {action}"
     except Exception as e:
@@ -455,6 +457,33 @@ def _sector_reports(sector: str = "") -> str:
         return f"行业研报查询失败: {e}"
 
 
+def _news(symbol: str = "", max_results: int = 5) -> str:
+    """个股新闻查询 (复用 news_intel.fetch_stock_news 多源链, fail-closed)。"""
+    try:
+        if not symbol or str(symbol).strip() in ("{symbol}", ""):
+            return "请提供股票代码，如 '查询 600519 个股新闻'"
+        from laap.paper_trading.news_intel import fetch_stock_news
+        items, meta = fetch_stock_news(str(symbol).strip(), max_results=max_results)
+        if not items:
+            fallback = "（数据源降级/不可用）" if meta.get("used_fallback") else ""
+            return f"未获取到 {symbol} 的新闻{fallback}"
+        lines = [f"📰 {symbol} 最近新闻（{len(items)} 条）:"]
+        for i, it in enumerate(items, 1):
+            title = (it.title or "").strip()
+            if not title:
+                continue
+            ts = (it.published_at or "")[:16].replace("T", " ")
+            src = it.source or ""
+            lines.append(f"  {i}. {title[:50]}")
+            if ts or src:
+                lines.append(f"     [{src or '未知'}] {ts}")
+        if meta.get("used_fallback"):
+            lines.append("  ⚠️ 部分数据源降级（stub/缓存）")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"个股新闻查询失败: {e}"
+
+
 # ─── Phase 1 新增: 学习/识别类只读工具 (方案 v2.0 §4.2.1) ─────
 
 def _lessons(conn) -> str:
@@ -645,6 +674,7 @@ PAPER_TRADING_TOOLS: Dict[str, Dict[str, Any]] = {
     "pt_watchlist": {"fn": lambda: _run("watchlist"), "desc": "列出我的自选股"},
     "pt_profile": {"fn": lambda symbol: _run("profile", symbol=symbol), "desc": "个股资料查询"},
     "pt_sector_reports": {"fn": lambda sector: _run("sector_reports", sector=sector), "desc": "行业/板块研报"},
+    "pt_news": {"fn": lambda symbol: _run("news", symbol=symbol), "desc": "个股新闻查询"},
 }
 
 

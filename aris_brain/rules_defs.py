@@ -676,6 +676,20 @@ DEFAULT_RULES: List[Rule] = [
                 ],
                 output_template="{result}",
             ),
+            # ── 2026-08-16: 个股新闻规则 ──
+            Rule(
+                name="pt_news_rule",
+                # 引导词(查一下/查查/查下)必须与 profile 规则共存：带"新闻/消息/资讯"字样时
+                # 本规则多个 pattern 命中 → score 更高胜出；纯资料查询(如"查一下 600519")
+                # 仅引导词命中 → profile 因 patterns 更少 ratio 更高而胜出，两者互不破坏。
+                patterns=["个股新闻", "最新新闻", "新闻", "消息", "资讯", "有什么新闻", "查新闻", "看看新闻", "查一下", "查查", "查下", "查一下新闻", "查查新闻", "查下新闻", "查一下消息", "查查消息", "查下消息", "有什么消息", "最新消息", "看看消息", "的新闻", "的消息", "news"],
+                intent="pt_news",
+                description="查询个股新闻（多源链）",
+                steps=[
+                    RuleStep(tool="pt_news", params={"symbol": "{symbol}"}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
 ]
 
 
