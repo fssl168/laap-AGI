@@ -202,7 +202,7 @@ DEFAULT_RULES: List[Rule] = [
             ),
             Rule(
                 name="generate_paper_rule",
-                patterns=["写论文", "生成论文", "论文综述", "写文章", "综述", "paper", "文章"],
+                patterns=["写论文", "生成论文", "论文综述", "写文章", "综述", "文章生成", "论文"],
                 intent="generate_paper",
                 description="生成零LLM论文",
                 steps=[
@@ -235,7 +235,7 @@ DEFAULT_RULES: List[Rule] = [
             ),
             Rule(
                 name="my_journey_rule",
-                patterns=["你的历程", "你的经历", "最近发生", "最近的事情", "说说你自己", "你的故事", "回顾一下", "journey", "history", "你的历史", "你怎么来的", "你最近在做什么", "最近在忙什么", "今天做了什么", "今天发生了什么", "最近的情况", "你的一天", "讲讲你的经历"],
+                patterns=["你的历程", "你的经历", "最近发生", "最近的事情", "说说你自己", "你的故事", "回顾一下", "journey", "你的历史", "你怎么来的", "你最近在做什么", "最近在忙什么", "今天做了什么", "今天发生了什么", "最近的情况", "你的一天", "讲讲你的经历"],
                 intent="my_journey",
                 description="Aris回顾自己的历程",
                 steps=[
@@ -416,7 +416,7 @@ DEFAULT_RULES: List[Rule] = [
             # ─── Paper Trading 规则 (ARIS 接管) ───────────────────────
             Rule(
                 name="pt_account_list",
-                patterns=["paper交易账户", "纸面交易账户", "查看账户", "账户列表", "account list", "list accounts"],
+                patterns=["paper交易账户", "纸面交易账户", "查看账户", "查账户", "账户列表", "account list", "list accounts"],
                 intent="pt_account_list",
                 description="列出所有paper_trading虚拟账户",
                 steps=[
@@ -430,7 +430,7 @@ DEFAULT_RULES: List[Rule] = [
                 intent="pt_account_show",
                 description="查看指定账户的详细信息",
                 steps=[
-                    RuleStep(tool="pt_account_show", params={"account_id": "{account_id}"}, output_key="result"),
+                    RuleStep(tool="pt_account_show", params={}, output_key="result"),
                 ],
                 output_template="{result}",
             ),
@@ -440,7 +440,7 @@ DEFAULT_RULES: List[Rule] = [
                 intent="pt_account_positions",
                 description="查看账户当前持仓",
                 steps=[
-                    RuleStep(tool="pt_account_positions", params={"account_id": "{account_id}"}, output_key="result"),
+                    RuleStep(tool="pt_account_positions", params={}, output_key="result"),
                 ],
                 output_template="{result}",
             ),
@@ -460,7 +460,7 @@ DEFAULT_RULES: List[Rule] = [
                 intent="pt_backtest_run",
                 description="对指定策略运行回测",
                 steps=[
-                    RuleStep(tool="pt_backtest_run", params={"strategy": "{strategy}", "account_id": "{account_id}"}, output_key="result"),
+                    RuleStep(tool="pt_backtest_run", params={"strategy": "{strategy}"}, output_key="result"),
                 ],
                 output_template="{result}",
             ),
@@ -470,7 +470,7 @@ DEFAULT_RULES: List[Rule] = [
                 intent="pt_risk_check",
                 description="检查paper_trading风控状态",
                 steps=[
-                    RuleStep(tool="pt_risk_check", params={"account_id": "{account_id}"}, output_key="result"),
+                    RuleStep(tool="pt_risk_check", params={}, output_key="result"),
                 ],
                 output_template="{result}",
             ),
@@ -480,7 +480,7 @@ DEFAULT_RULES: List[Rule] = [
                 intent="pt_performance",
                 description="查看paper_trading绩效报告",
                 steps=[
-                    RuleStep(tool="pt_performance", params={"account_id": "{account_id}"}, output_key="result"),
+                    RuleStep(tool="pt_performance", params={}, output_key="result"),
                 ],
                 output_template="{result}",
             ),
@@ -507,7 +507,7 @@ DEFAULT_RULES: List[Rule] = [
             ),
             Rule(
                 name="pt_signals_rule",
-                patterns=["最近信号", "交易信号", "有什么信号", "信号列表", "最新信号", "signals"],
+                patterns=["最近信号", "交易信号", "有什么信号", "信号列表", "列出信号", "最新信号", "signals"],
                 intent="pt_signals",
                 description="查询最近交易信号（识别能力）",
                 steps=[
@@ -548,7 +548,7 @@ DEFAULT_RULES: List[Rule] = [
             # ── Phase 2 新增 (方案 v2.0 §4.3): 动作规则 (带审核/二次确认) ──
             Rule(
                 name="pt_decide_rule",
-                patterns=["要不要买", "要不要卖", "值得买吗", "该不该买", "能买吗", "可以买", "分析下买", "decide"],
+                patterns=["要不要买", "要不要卖", "值得买吗", "值得卖吗", "该不该买", "该不该卖", "能买吗", "能卖吗", "可以买", "可以卖", "分析下买", "分析下卖", "卖出", "买入", "decide"],
                 intent="pt_decide",
                 description="交易决策建议（审核，不下单）",
                 steps=[
@@ -558,7 +558,7 @@ DEFAULT_RULES: List[Rule] = [
             ),
             Rule(
                 name="pt_execute_rule",
-                patterns=["确认执行", "确认下单", "下单吧", "执行买入", "执行卖出", "就买", "买吧"],
+                patterns=["确认执行", "确认下单", "下单吧", "执行买入", "执行卖出"],
                 intent="pt_execute",
                 description="确认执行下单（需二次确认 + TradingSelf 审核）",
                 steps=[
@@ -596,6 +596,21 @@ DEFAULT_RULES: List[Rule] = [
                     RuleStep(tool="pt_evolution_audit", params={}, output_key="result"),
                 ],
                 output_template="{result}",
+            ),
+            # ── 2026-08-16: paper_trading 能力清单规则 ──
+            # QQ 发 "paper_trading"/"trading"/"有哪些工具" 时, 规则引擎直接
+            # 返回能力清单（对齐 aris-paper-trading 技能内容, 不依赖 Hermes 技能加载）。
+            # 注意: 不能含裸 "paper"（会劫持论文规则），用完整词 "paper_trading"/"trading"。
+            Rule(
+                name="pt_capability_rule",
+                patterns=["paper_trading", "trading", "有哪些工具", "有什么功能", "能力清单", "你会什么", "你能做什么", "paper trading", "模拟交易", "纸面交易"],
+                intent="pt_capability",
+                description="paper_trading 能力清单",
+                steps=[
+                    RuleStep(tool="pt_health", params={}, output_key="health"),
+                ],
+                output_template="paper_trading 支持：查看账户/持仓/信号/订单/成交/净值/绩效、策略列表、回测、风控检查、风控事件、交易教训、交易决策（pt_decide）、确认执行下单（pt_execute，需二次确认）、平仓（pt_close）、每日简报（pt_brief）、演化治理（pt_evolution_audit）。\n\n直接说具体指令即可，例如：\"查看持仓\"、\"列出信号\"、\"跑个回测\"、\"确认执行买入 600114 100股\"。\n\n当前系统状态：\n{health}",
+                min_confidence=0.05,
             ),
 ]
 

@@ -202,7 +202,7 @@ class RulesEngine:
             intent["params"]["symbol"] = m.group(1)
         # 买卖意图 (仅在明确动词时提取, 避免误判)
         action = ""
-        if re.search(r'买(入)?\s*(不)?\s*$|买入|要不要买|值得买|可以买|买吧|就买', text):
+        if re.search(r'买(入)?\s*(不)?\s*$|买入|要不要买|值得买|可以买', text):
             action = "buy"
         elif re.search(r'卖出|要不要卖|值得卖|卖吧|平仓|清仓', text):
             action = "sell"
@@ -213,8 +213,11 @@ class RulesEngine:
         if m:
             qty = int(m.group(1)) * (100 if m.group(2) == "手" else 1)
             intent["params"]["qty"] = qty
+        # 有买卖意图但未指定股数 → qty=0 (按建议仓位, 避免占位符残留 {qty})
+        elif action:
+            intent["params"]["qty"] = 0
         # 确认词 (pt_execute 二次确认)
-        if re.search(r'确认执行|确认下单|确认平仓|下单吧|就买|买吧|执行', text):
+        if re.search(r'确认执行|确认下单|确认平仓|下单吧|执行', text):
             intent["params"]["confirm_word"] = "确认执行"
 
         return intent

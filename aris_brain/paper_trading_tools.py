@@ -427,8 +427,13 @@ def _quant_decide(symbol: str, action: str, qty: int = 0,
             head = "⚠️ 建议：观望（有顾虑）"
         else:
             head = "⛔ 建议：不执行"
+        # 输出友好化: action 转中文, qty 安全转 int (占位符替换可能传字符串)
+        action_cn = {"buy": "买入", "sell": "卖出"}.get(action, action)
+        qty_int = _coerce_qty(qty)
+        qty_txt = f"{qty_int}股" if qty_int else "按建议仓位"
+        symbol_txt = symbol if symbol and str(symbol).strip() not in ("{symbol}", "") else "该标的"
         reasons = "；".join(r.get("reasons", [])) or "无"
-        return f"{head} {symbol} {action} {qty or ''}\n  依据: {r.get('meaning','')}\n  顾虑: {reasons}"
+        return f"{head} {symbol_txt} {action_cn} {qty_txt}\n  依据: {r.get('meaning','')}\n  顾虑: {reasons}"
     except Exception as e:
         return f"[决策不可用] {e}"
 
@@ -437,6 +442,10 @@ def _quant_execute(symbol: str, action: str, qty: int,
                    confirm_word: str = "") -> str:
     """确认执行下单 (需二次确认 + judge 通过)。"""
     try:
+        # 2026-08-16: RuleStep params 字符串模板会把 qty 传成 "100" 字符串,
+        # use_execute 里 qty*price 报 "can't multiply sequence by non-int"。
+        # 入口做 int 防御转换 (最小改动, 不动规则定义)。
+        qty = _coerce_qty(qty)
         r = _quant_bridge().use_execute(
             symbol=symbol, action=action, qty=qty, confirm_word=confirm_word)
         if r.get("executed"):
@@ -453,6 +462,8 @@ def _quant_execute(symbol: str, action: str, qty: int,
 def _quant_close(symbol: str, qty: int = 0, confirm_word: str = "") -> str:
     """平仓 (需审核 + 确认)。"""
     try:
+        # 2026-08-16: 同 _quant_execute, RuleStep 字符串模板会把 qty 传成 str。
+        qty = _coerce_qty(qty)
         r = _quant_bridge().use_close(symbol, qty, confirm_word)
         if r.get("executed"):
             return f"✅ 已平仓 {symbol}: {r.get('status','')}"
@@ -463,6 +474,19 @@ def _quant_close(symbol: str, qty: int = 0, confirm_word: str = "") -> str:
         return f"⛔ 未平仓：{r.get('status', r.get('error',''))}"
     except Exception as e:
         return f"[平仓不可用] {e}"
+
+
+def _coerce_qty(qty) -> int:
+    """把 RuleStep 模板传参 (可能是 '0'/'100'/None/'') 安全转为 int。"""
+    try:
+        if qty is None:
+            return 0
+        s = str(qty).strip()
+        if s in ("", "None", "0"):
+            return 0
+        return int(s)
+    except (ValueError, TypeError):
+        return 0
 
 
 # ─── 工具注册表 ────────────────────────────────────────────
