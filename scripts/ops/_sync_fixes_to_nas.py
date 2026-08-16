@@ -27,6 +27,10 @@ FILES = [
     "laap/paper_trading/quant_config.py",
     "laap/paper_trading/trading_self.py",
     "laap/paper_trading/paper_service.py",
+    "laap/paper_trading/backtest_runner.py",
+    "laap/paper_trading/daily_pipeline.py",
+    "laap/paper_trading/indicators.py",
+    "laap/paper_trading/strategy_templates.py",
     # 测试
     "tests/test_quant_bridge_phase1.py",
     "tests/test_quant_bridge_phase2.py",
@@ -40,6 +44,9 @@ FILES = [
     "tests/test_paper_phase4.py",
     "tests/test_market_source.py",
     "tests/test_api_security.py",
+    "tests/test_indicators.py",
+    "tests/test_strategy_templates.py",
+    "tests/test_daily_pipeline.py",
     # 文档
     "docs/paper_trading_aris_integration_plan.md",
     "docs/paper_trading_aris_usage.md",
