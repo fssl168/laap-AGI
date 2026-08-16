@@ -454,8 +454,13 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
             "发个语音", "发一条语音", "发条语音", "发语音", "语音过来",
             "直连", "接通", "找小龙", "切回", "语音回复", "来段语音", "来条语音",
         )
-        # Hermes 系统提示/内部指令 (英文): 命中即不写 (2026-08-14 修复 skill-review 污染)
+        # Hermes 系统提示/内部指令 (英文): 命中即不写 (2026-08-14 修复 skill-review 污染;
+        # 2026-08-16 补 [System note / [tool] —— gateway 中断恢复的系统提示与工具结果
+        # 会被当作 user 消息传入, 不滤掉就污染记忆检索)
         _MEM_ENGLISH_HINTS = (
+            "system note",
+            "[system",
+            "[tool]",
             "review the conversation",
             "skill library",
             "update the skill",
@@ -468,6 +473,12 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
         # 常见疑问句尾: 命中任一即不写
         _MEM_QUESTION_TAILS = ("吗", "呢", "?", "？", "什么", "吗。", "了。", "了吗", "有没有")
         should_mem = len(_mem_text) >= 6
+        # Hermes gateway 系统消息/工具结果/后台通知前缀: 命中即不写
+        # (2026-08-16 实测: gateway 会把 [System note]/[tool] 输出当 user 消息传入,
+        # 自动记忆曾把 "[tool] {\"output\": [...]" 与 "[System note: ...]" 存成记忆碎片)
+        _MEM_SYSTEM_PREFIXES = ("[System", "[tool]", "[IMPORTANT")
+        if _mem_text.lstrip().startswith(_MEM_SYSTEM_PREFIXES):
+            should_mem = False
         if should_mem:
             for h in _MEM_EXCLUDE_HINTS:
                 if h in _mem_text:
@@ -508,18 +519,33 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
         logger.debug(f"Auto-memory skipped: {e}")
 
     # ── Step 2: RulesEngine ──
+    # ⚠️ Hermes 注入的系统提示(英文 system note / background-review 指令) 含
+    # "history"/"search" 等英文词, 子串匹配会误命中 my_journey_rule 等规则
+    # → 每条消息都回"回顾历程" (2026-08-16 实测修复, 根因复现见会话记录)。
+    # 命中注入特征时跳过规则引擎, 直接走后续 LongForm/LLM 兜底。
+    _SYSTEM_INJECTION_HINTS = (
+        "[system note", "[system:", "review the conversation",
+        "conversation above", "consider saving to memory", "pending items",
+        "background review", "be active", "skill library", "most sessions",
+    )
+    _is_system_injection = any(
+        h in user_msg.lower() for h in _SYSTEM_INJECTION_HINTS
+    )
     try:
-        # aris_rules_engine 已是包内模块(相对导入), 需把 LAAP_ROOT 入 path 按包导入
-        sys.path.insert(0, str(LAAP_ROOT))
-        from aris_brain.aris_rules_engine import process as rules_process, get_engine as get_rules_engine
+        if _is_system_injection:
+            logger.info("RulesEngine skipped: system-injected message (%s)", user_msg[:80])
+        else:
+            # aris_rules_engine 已是包内模块(相对导入), 需把 LAAP_ROOT 入 path 按包导入
+            sys.path.insert(0, str(LAAP_ROOT))
+            from aris_brain.aris_rules_engine import process as rules_process, get_engine as get_rules_engine
 
-        re_engine = get_rules_engine()
-        rule_result = rules_process(user_msg)
-        if rule_result and rule_result.get("matched"):
-            return {
-                "content": rule_result.get("output", ""),
-                "engine": f"rules:{rule_result.get('rule','unknown')}",
-            }
+            re_engine = get_rules_engine()
+            rule_result = rules_process(user_msg)
+            if rule_result and rule_result.get("matched"):
+                return {
+                    "content": rule_result.get("output", ""),
+                    "engine": f"rules:{rule_result.get('rule','unknown')}",
+                }
     except Exception as e:
         logger.debug(f"RulesEngine fallback: {e}")
 
@@ -587,12 +613,23 @@ async def handle_chat_completions(request):
     tools = body.get("tools") or []
 
     # 输入防护: 消息数量与总长度上限, 防 token 洪泛 DoS
-    MAX_MESSAGES = 50
+    # 2026-08-16: 超长历史改为"截断到最近 N 条 + 保留 system"而非硬 400 ——
+    # Hermes QQ 长会话历史会持续增长, 硬拒导致 "provider failed after retries"
+    # (errors.log: too many messages)。防护语义保留(仍防超大输入), 但合法长会话可用。
+    MAX_MESSAGES = 100
     MAX_TOTAL_CHARS = 200_000
     if not isinstance(messages, list) or not messages:
         return web.json_response({"error": "messages must be a non-empty list"}, status=400)
     if len(messages) > MAX_MESSAGES:
-        return web.json_response({"error": f"too many messages (max {MAX_MESSAGES})"}, status=400)
+        # 保留 system(若有) + 最近 (MAX_MESSAGES-1) 条, 丢弃最早的非 system 消息
+        system_msgs = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
+        recent = [m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")]
+        kept = system_msgs + recent[-(MAX_MESSAGES - len(system_msgs)):]
+        logger.info(
+            "Truncated long conversation: %d -> %d messages (keep system + recent %d)",
+            len(messages), len(kept), MAX_MESSAGES - len(system_msgs),
+        )
+        messages = kept
     total_chars = sum(len(str(m.get("content", ""))) for m in messages if isinstance(m, dict))
     if total_chars > MAX_TOTAL_CHARS:
         return web.json_response({"error": f"message content too large (max {MAX_TOTAL_CHARS} chars)"}, status=400)
