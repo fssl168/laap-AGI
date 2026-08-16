@@ -53,6 +53,9 @@ FILES = [
     "tests/test_strategy_templates.py",
     "tests/test_daily_pipeline.py",
     "tests/test_news_gate.py",
+    "tests/test_news_intel.py",
+    # 每日任务脚本
+    "scripts/market/_memorize_news_daily.py",
     # 文档
     "docs/paper_trading_aris_integration_plan.md",
     "docs/paper_trading_aris_usage.md",
