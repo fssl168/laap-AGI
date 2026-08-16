@@ -60,6 +60,7 @@ FILES = [
     "docs/paper_trading_strategy_eval_600519.md",
     "docs/paper_trading_strategy_eval_multi.md",
     "docs/paper_trading_strategy_eval_full.md",
+    "docs/paper_trading_2track_replay_eval.md",
     # 配置
     ".env.example",
 ]
