@@ -287,9 +287,12 @@ def register_default_tools(registry) -> None:
 
     def tool_generate_paper(topic: str = "", target_chars: int = 1500, structure: str = "paper") -> str:
         """生成论文/自我介绍。structure: paper|self_intro。"""
-        import subprocess as _sp, sys as _s
+        import subprocess as _sp, sys as _sys
+        # 2026-08-16: 用 LAAP venv 的 python（_sys.executable 是 uv 裸 python, 无 numpy,
+        # longform_synthesizer import numpy 必挂）
+        _py = r"D:\laap-AGI\.venv\Scripts\python.exe"
         try:
-            r = _sp.run([_sys.executable, '-c', f'''
+            r = _sp.run([_py, '-c', f'''
 import sys; sys.path.insert(0, ".")
 import sys as _s; _s.path.insert(0, r"D:\\laap-AGI")
 try:

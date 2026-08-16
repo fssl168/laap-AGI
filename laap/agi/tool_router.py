@@ -116,7 +116,15 @@ def _tool_domain_weights(tool: Dict) -> Dict[str, int]:
 
 def _user_intents(user_msg: str) -> set:
     tokens = tokenize(user_msg) | _ascii_words(user_msg)
-    return _domain_hits(tokens)
+    intents = _domain_hits(tokens)
+    # 2026-08-16: "paper_trading" 是纸面交易意图, tokenize 会拆出 "paper"
+    # 误命中论文域(paper) → arxiv 工具被路由 → Hermes tool_search 空匹配泄漏 JSON。
+    # 原文含 paper_trading/纸面交易/模拟交易 时剔除论文域, 归入交易相关意图。
+    msg_lower = (user_msg or "").lower()
+    if any(w in msg_lower for w in ("paper_trading", "paper trading", "纸面交易", "模拟交易", "模拟盘")):
+        intents.discard("paper")
+        intents.add("portfolio")
+    return intents
 
 
 # ── 股票实体锚点 ──────────────────────────────────────────────

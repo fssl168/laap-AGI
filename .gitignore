@@ -90,5 +90,6 @@ real_data/
 voice_cache/
 paper_trading/
 .sync_backup/
+.sync_review_*/
 aris_brain/laap_semantic_memory.json
 aris_brain/memory_hierarchy.json

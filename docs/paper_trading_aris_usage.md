@@ -1,182 +1,209 @@
-# LAAP paper_trading 接入 Aris — 使用指南
+# paper_trading × Aris 使用手册
 
-> 让 Aris（数字生命体）成为交易业务的**一等参与者**：覆盖学习 / 识别 / 采集 / 使用 / 决策五能力。
-> 本文档为实际操作手册，配套实施方案见 `docs/paper_trading_aris_integration_plan.md`（Phase 1-3 已完成）。
-> 版本：2026-08-16
+> ARIS 认知体系 × paper_trading 全流程接入 — 使用指南
+> 版本: v0.1(方案已确认, P1 感知接入实施中)
+> 日期: 2026-08-16
 
 ---
 
-## 1. 前提
+## 1. 当前能力矩阵
 
-```bash
-# 1. 启动服务（daemon 已在运行时跳过）
-python -m laap_brain.api        # 默认 127.0.0.1:11546
+| 能力 | 状态 | 触发方式 | 说明 |
+|---|---|---|---|
+| **交易状态查询** | 🚧 P1 | 问 Aris"最近交易怎么样" | 净值/持仓/盈亏 |
+| **交易教训召回** | 🚧 P1 | 问 Aris"有什么交易教训" | 语义记忆召回,含标的/类型 |
+| **交易信号感知** | 🚧 P1 | 认知总线自动注入 | 盈利→valence+ / 亏损→valence- |
+| **交易建议** | 📋 规划 P2 | 问 Aris"XX要不要买" | **只建议,不自动下单**(用户已确认) |
+| **下单执行** | 📋 规划 P2 | 用户明确确认后 | 需 TradingSelf 审核 + 二次确认 |
+| **每日简报** | 📋 规划 P3 | 每日 15:30 cron | 净值/盈亏/教训/明日关注 |
+| **进化治理** | 📋 规划 P3 | 问 Aris"进化提案" | 列提案 → 批准/拒绝 |
 
-# 2. 关键开关（当前 fail-closed 安全默认）
-PAPER_TRADING_AUTO_EXECUTE=0    # 0=只建议不下单；1=允许执行(仍需确认词)
+> 🚧 = 实施中 / 📋 = 已规划 / ✅ = 可用
+
+---
+
+## 2. 快速上手(对话示例)
+
+### 2.1 查询交易状态
+```
+用户: 最近交易怎么样?
+Aris: 当前账户净值 ¥1,024,531(累计 +2.45%)。
+      持仓: 贵州茅台 200股(浮盈+3.1%)、五粮液 300股(浮亏-2.4%)...
 ```
 
-- 执行边界三层纵深防御：
-  1. `PAPER_TRADING_AUTO_EXECUTE=0` → 默认拒绝自动下单
-  2. 二次确认词硬门槛 → 用户须说"确认执行/确认平仓"等
-  3. `TradingSelf.judge` 审核 → 非 approve 一律拒绝（风控 R1-R5 一票否决）
+### 2.2 查询交易教训
+```
+用户: 交易上学到什么教训了吗?
+Aris: 记得 3 条教训:
+      • [止损]600519 跌破止损位 1445.94 离场,教训是趋势破位要果断
+      • [止盈]300750 止盈触发 398.19 卖出,预期管理准确
+      • [风控]隆基绿能弱势空头+亏损财报,止损执行正确
+```
+
+### 2.3 交易建议(P2 后)
+```
+用户: 帮我看看五粮液要不要加仓?
+Aris: 建议:观望(不买入)。
+      依据: MACD 空头、浮亏-48.9%,记忆中有 2 条同标的负面教训。
+      风险提示: 当前处于弱势,止损位 67.77。
+      注: 我只给建议,不下单。如需执行请明确说"确认买入"。
+```
+
+### 2.4 每日简报(P3 后)
+```
+用户: 今日交易简报
+Aris: 📊 2026-08-16 交易简报
+      净值: ¥1,024,531(+0.32%)
+      今日交易: 无
+      持仓: 3 只(茅台/五粮液/平安)
+      教训: 无新增
+      明日关注: 五粮液止损挂单 75.12 待确认
+```
 
 ---
 
-## 2. 方式一：直接问 Aris（推荐，零门槛）
+## 3. 设计约束(用户确认 2026-08-16)
 
-规则引擎已内置 **18 条 pt_* 交易规则**，用自然语言对话即可。
-
-### 2.1 学习/查询（只读，无副作用）
-
-| 你想知道 | 怎么说 | 命中规则 |
-|---|---|---|
-| 盈亏情况 | "我们最近交易怎么样" / "赚了还是亏" | `pt_net_value_rule` |
-| 交易教训 | "有什么交易教训" / "学到什么" | `pt_lessons_rule` |
-| 当前持仓 | "当前持仓如何" / "我的持仓" | `pt_portfolio_rule` |
-| 最近信号 | "最近有什么信号" | `pt_signals_rule` |
-| 风控记录 | "被风控拦过吗" / "风控拒绝记录" | `pt_risk_events_rule` |
-| 绩效报告 | "绩效报告" / "收益报告" | `pt_performance` |
-| 系统健康 | "系统健康" | `pt_health` |
-| 账户 | "查看账户" / "账户列表" | `pt_account_list` |
-
-### 2.2 决策（只给建议，不下单——当前开关=0）
-
-| 你想做 | 怎么说 | 行为 |
-|---|---|---|
-| 问要不要买 | "帮我看下600519要不要买" | `pt_decide` → TradingSelf.judge 审核 → 给建议 |
-| 问要不要卖 | "五粮液值得卖吗" | 同上 |
-
-### 2.3 执行（需二次确认词）
-
-| 你想做 | 怎么说 |
+| 约束 | 值 |
 |---|---|
-| 确认买入 | "确认执行 买入 600519 100股"（确认词硬门槛） |
-| 确认平仓 | "确认平仓 600519" |
-
-> ⚠️ 即使 `PAPER_TRADING_AUTO_EXECUTE=1`，没有"确认执行/确认平仓"等词也会被拒。
-
-### 2.4 管理（复盘/治理）
-
-| 你想做 | 怎么说 |
-|---|---|
-| 每日简报 | "今日交易简报" / "今天交易怎么样" |
-| 进化提案 | "看下进化提案" / "策略改进" |
+| 执行边界 | **ARIS 只建议**,`paper_trading_auto_execute=false` |
+| 数据范围 | 3 标的:600519 / 000001 / 000858 |
+| 认知注入 | 交易事件**只影响情绪**(valence/arousal),**不动能力判断**(competence/certainty) |
+| 简报频率 | 每日 15:30 cron |
 
 ---
 
-## 3. 方式二：直接调 API（自动化场景）
+## 4. 技术接入点
 
-daemon 的 `/v1/chat/completions` 是 OpenAI 兼容入口，可把上述对话通过 API 发：
+### 4.1 新增 Aris 工具(只读, P1)
+`aris_brain/rules_tools.py` → `register_default_tools()` 末尾:
 
-```bash
-curl.exe -X POST http://127.0.0.1:11546/v1/chat/completions ^
-  -H "Content-Type: application/json" ^
-  -d "{\"model\":\"laap-core\",\"messages\":[{\"role\":\"user\",\"content\":\"今日交易简报\"}]}"
-```
-
-已有的量化端点（20+）也可直接用：
-
-```bash
-# 决策留痕 / 教训 / 净值 / 信号 / 风控
-curl.exe http://127.0.0.1:11546/v1/quant/decisions
-curl.exe http://127.0.0.1:11546/v1/quant/lessons
-curl.exe http://127.0.0.1:11546/v1/quant/net_values
-curl.exe http://127.0.0.1:11546/v1/quant/signals
-curl.exe "http://127.0.0.1:11546/v1/quant/risk/rejections?symbol=600519"
-curl.exe "http://127.0.0.1:11546/v1/quant/kline?symbol=600519&days=120"
-
-# 进化治理
-curl.exe http://127.0.0.1:11546/v1/quant/evolve/audit
-```
-
----
-
-## 4. 方式三：Python 直接调用（开发/测试）
-
-### 4.1 走规则引擎（与对话一致）
-
-```python
-import sys; sys.path.insert(0, r"D:\laap-AGI")
-from aris_brain.aris_rules_engine import get_engine
-
-e = get_engine()
-print(e.process("今日交易简报")["output"])                 # 简报
-print(e.process("帮我看下600519要不要买")["output"])       # 决策建议
-print(e.process("确认执行 买入 600519 100股")["output"])   # 执行（需确认词）
-```
-
-### 4.2 直接走 quant_bridge（跳过规则层）
-
-```python
-from laap.paper_trading.quant_bridge import get_bridge
-b = get_bridge()
-
-# 审核建议（永不下单）
-b.use_decide("600519", "buy", 100)
-
-# 执行（二次确认 + judge 审核）
-b.use_execute("600519", "buy", 100, confirm_word="确认执行")
-
-# 平仓
-b.use_close("600519", 100, confirm_word="确认平仓")
-
-# 事件注入（平仓/风控/结算 → 认知总线 → PSI 情绪）
-b.sense_event("quant_trade_closed", payload={"symbol": "600519"}, pnl=-120.5)
-```
-
----
-
-## 5. 自动化（cron）
-
-**工作日 15:30 自动执行**（已注册 Windows 计划任务 `LAAP_Memorize_Trading_Daily`）：
-拉取当日交易状态 → 写语义记忆【交易日报 YYYY-MM-DD】→ 次日你问 Aris 它会记得（"昨天亏了，今天谨慎些"）。
-
-手动触发一次：
-
-```bash
-python "%USERPROFILE%\AppData\Local\hermes\scripts\memorize_trading_daily.py"
-```
-
----
-
-## 6. 数据在哪
-
-| 数据 | 位置 | 说明 |
+| 工具名 | 功能 | 数据源 |
 |---|---|---|
-| paper 账本 | `data/paper_trading.db` | 11 表：signals/orders/trades/net_values/decisions/outcomes/evolutions/news_items/news_verdicts/risk_rejections/news_summaries |
-| Aris 语义记忆 | `aris_brain/laap_semantic_memory.json` | 教训双写 + 交易日报 |
-| 进化治理审计 | `state/evolution_audit.jsonl` | 进化提案/决策/部署/回滚 |
-| 回测/验证数据 | `data/watchlist_kline/kline.db` | 真实 K 线 |
+| `quant_status` | 净值/持仓/盈亏总览 | `/v1/quant/net_values` + trades |
+| `quant_lessons` | 教训列表 | `/v1/quant/lessons` |
+| `quant_portfolio` | 持仓明细 | DB trades 未平仓 |
+| `quant_signals` | 最近信号 | `/v1/quant/signals` |
 
----
+### 4.2 认知总线事件(P1)
+`cognitive_bus.py` 增加交易事件源,5 类事件:
+`QUANT_SIGNAL / QUANT_TRADE_CLOSED / QUANT_RISK_TRIGGERED / QUANT_DAILY_SETTLE / QUANT_EVOLUTION_PROPOSED`
+→ 只改 valence/arousal,不改 competence/certainty。
 
-## 7. 关键边界提醒
+### 4.3 教训双写(P1)
+`memory_bridge.py::encode_lesson` 增加第二写:
+UnifiedMemory(已有) + `laap_semantic_memory.json`(标签 `【交易教训】`+标的+类型)
+→ Aris 的 `recall_fact_rule` 可召回交易经验。
 
-1. **当前是 paper 模拟账户**（非真实资金），账本在 `data/paper_trading.db`
-2. **`PAPER_TRADING_AUTO_EXECUTE=0` 下 Aris 永不下单**——要授权改 `.env` 为 `1` 后重启 daemon（但仍需确认词）
-3. **策略无泛化 alpha**（OOS 通过率 10-20%）——Aris 会如实汇报亏损，它是"受控模拟环境的功能验证"，不承诺收益
-4. `laap/paper_trading/` 为**本地资产不进 git**（NAS 不同步约定）；入库的是规则层（`aris_brain/`）与测试（`tests/`）
-5. 沙箱联网受限时数据源 fallback 到 stub（`used_fallback=True` 诚实标记）；真实行情验证需在用户环境执行
+### 4.4 动作工具(P2, 只建议)
+`tool_quant_decide` / `tool_quant_execute` / `tool_quant_close`:
+- 全部走 `TradingSelf.judge()` 审核
+- `auto_execute=false`: 只输出建议,不触碰 DB 写路径
+- 用户明确确认词("确认买入/确认卖出")后才执行
+- 审计写 `risk_rejections` 表
 
----
+### 4.5 每日简报(P3)
+- 规则:`quant_daily_brief_rule`(触发"今日交易简报/今天交易怎么样")
+- cron: 15:30 no_agent 脚本 → 拉取 quant 状态 → 写入语义记忆
+  `【交易日报 YYYY-MM-DD】...` → Aris 次日自动感知
 
-## 8. 快速验证清单
+### 4.6 Hermes 接入 LAAP（custom provider 配置）
 
-```bash
-# 1. daemon 健康
-curl.exe http://127.0.0.1:11546/health
+Hermes 通过 LAAP-AGI 本体接入点连接（模型 `laap-core`），触发规则引擎全部 pt_* 技能：
 
-# 2. 规则触发（应命中 pt_brief_rule）
-python -c "import sys; sys.path.insert(0, r'D:\laap-AGI'); from aris_brain.aris_rules_engine import get_engine; print(get_engine().process('今日交易简报')['rule'])"
+**配置位置**：`%LOCALAPPDATA%\hermes\config.yaml`
 
-# 3. 零悬空契约（应输出 True）
-python -c "import sys; sys.path.insert(0, r'D:\laap-AGI'); from aris_brain.rules_defs import DEFAULT_RULES, ToolRegistry; from aris_brain.rules_tools import register_default_tools; reg=ToolRegistry(); register_default_tools(reg); print(not [s.tool for r in DEFAULT_RULES for s in r.steps if s.tool not in reg.list()])"
-
-# 4. 全量回归（基线 800 passed）
-python -m pytest tests -q
+**custom_providers 条目**（`add_laap_provider.py` 可自动写入）：
+```yaml
+custom_providers:
+  - name: laap-agi
+    base_url: http://localhost:11546/v1
+    api_key: laap-brain
+    api_mode: chat_completions
+    models:
+      laap-core: { name: laap-core, context_length: 120000 }
+      laap-qre:  { name: laap-qre }
+      laap-rules:{ name: laap-rules }
+    model: laap-core
 ```
 
+**顶部 model 段**（关键：provider 必须带 `custom:` 前缀，否则 base_url 解析为空导致连接失败）：
+```yaml
+model:
+  default: laap-core
+  provider: custom:laap-agi     # 必须有 custom: 前缀
+  base_url: http://localhost:11546/v1
+  aliases:
+    laap: custom:laap-agi/laap-core
+```
+
+> ⚠️ **故障记录（2026-08-16）**：原配置 `provider: laap-agi`（无 `custom:` 前缀）
+> 导致 Hermes 走 `PROVIDER_REGISTRY` 找不到条目 → base_url 解析为空 → 连接失败。
+> 修复为 `custom:laap-agi` 后，端到端验证通过（可触发 pt_brief/pt_decide/pt_lessons 等技能）。
+
+**验证**：Hermes 内问"今日交易简报"，应返回 `engine=rules:pt_brief_rule` 的真实简报。
+
+### 4.7 微信消息频道接入 LAAP
+
+微信频道（`platforms.weixin`，腾讯 iLink Bot API）跟随 `model.default` 走 LAAP 本体，使微信里的对话触发全部 pt_* 技能。
+
+**配置**（`%LOCALAPPDATA%\hermes\config.yaml`）：
+```yaml
+model:
+  default: laap-core              # 微信频道模型 = model.default
+  provider: custom:laap-agi       # 必须有 custom: 前缀
+  base_url: http://localhost:11546/v1
+platforms:
+  weixin:
+    enabled: true
+    token: <WEIXIN_TOKEN>
+    allow_from: <你的微信ID@im.wechat>
+```
+
+**生效步骤**：
+```bash
+hermes gateway restart    # 使新配置生效
+hermes gateway list       # 确认 gateway 运行
+# 日志应显示: [Weixin] Connected account=... base=https://ilinkai.weixin.qq.com
+```
+
+**验证**（2026-08-16 实测）：微信消息"交易怎么样"→ `engine=rules:pt_net_value_rule` 返回真实净值；"当前持仓如何"→ 返回真实持仓（如 `600114: 100股 @ 30.02`）；"今日交易简报"→ 结构化简报。
+
+**附带能力**：网关同时注册了 `laap_brain` MCP server（12 个工具：laap_cognitive_state / laap_recall_memory / laap_bootstrap / laap_reflect / laap_express / laap_rsi_* 等），Hermes 可调用。
+
+> ⚠️ **故障记录（2026-08-16）**：model 段曾被外部改为 `provider: deepseek` + `base_url: http://localhost:11546/v1`（provider 名与 URL 不匹配）→ 微信消息无法触发 LAAP 技能。修复为 `provider: custom:laap-agi` + `default: laap-core` 后，微信链路验证通过。
+
 ---
 
-*本文档配套：实施方案 `docs/paper_trading_aris_integration_plan.md`、差距分析 `docs/laap-alignment-gap-analysis.md`。*
+## 5. 安全边界
+
+- ✅ 只读工具无副作用(状态/教训/持仓/信号)
+- ✅ 动作工具默认不执行,需 judge 通过 + 用户二次确认
+- ✅ 全部操作审计留痕(risk_rejections / evolutions 表)
+- ✅ 真实 OOS 负 alpha 如实汇报,不包装
+
+---
+
+## 6. 故障排查
+
+| 症状 | 排查 |
+|---|---|
+| Aris 回答"交易"相关走 fallback | 规则未注册 → 重启 LAAP(新进程加载规则) |
+| 教训召回不到 | 检查 `【交易教训】` 是否在语义记忆(recall 验证) |
+| 情绪无变化 | 认知总线事件源未启动 → 查 `start_background()` |
+| 简报未生成 | cron 副本路径/权限 → 查 cron list + 手动跑脚本 |
+| HTTP 400 (laap-core) | config.yaml `model.default` 应为 deepseek-v4-flash |
+
+---
+
+## 7. 里程碑
+
+- [ ] P1 感知接入(只读工具 + 认知事件 + 教训双写)
+- [ ] P2 使用接入(建议工具 + judge 审核)
+- [ ] P3 管理闭环(简报 + 进化治理 + 15:30 cron)
+
+每阶段完成 → 验收 → 用户确认 → 进入下一阶段。
+
+---
+
+*ARIS × paper_trading 使用手册 · 2026-08-16 · v0.1*

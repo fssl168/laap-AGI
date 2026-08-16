@@ -642,9 +642,20 @@ async def handle_chat_completions(request):
     engine = result.get("engine", "laap-core")
 
     # ── OpenAI 兼容工具调用：AGI 认知层决策（含 PSI 状态 + 语义记忆）──
+    # 2026-08-16 修复记录：
+    #  ① 规则引擎已命中时不路由工具——tool_router 会把"写论文"路由到 Hermes 的
+    #     arxiv/tool_search（描述含 paper 域词, score=9), tool_calls 覆盖规则结果
+    #     → Hermes 执行 deferred 工具 → tool_search 空匹配 → JSON 泄漏。
+    #  ② laap-core 本体: 规则未命中时**也不**路由工具, 直接走 LAAP 项目的 LLM
+    #     兜底 (llm:* engine, deepseek-v4-flash)——这是用户明确要求的行为:
+    #     "使用 laap-AGI 本体时, 关键词没有匹配上的话, 自动走 laap-AGI 上项目的 LLM"。
+    #     避免 tool_router 把未命中消息路由到 Hermes 工具 (arxiv/tool_search 等)
+    #     造成空匹配 JSON 泄漏。tool_router 仅对非 laap-core 模型 (如显式传其他模型) 生效。
     tool_calls = None
     response_extra: Dict = {}
-    if tools:
+    _rule_hit = str(engine).startswith("rules:")
+    _is_laap_core = str(model).lower() in ("laap-core", "laap", "")
+    if tools and not _rule_hit and not _is_laap_core:
         try:
             from laap.agi.tool_router import get_router
 
