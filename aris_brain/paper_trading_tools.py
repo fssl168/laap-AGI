@@ -218,9 +218,14 @@ def _trades(conn) -> str:
         rows = cursor.fetchall()
         if not rows:
             return "暂无成交"
-        result = "最近10笔成交:\n"
+        result = "最近10笔成交:\\n"
         for r in rows:
-            result += f"  {r[0]} {r[1]} {r[2]}股 @ {r[3]:.2f}, 盈亏{r[4]:+.2f} ({r[5]:.1f}%) 持仓{r[6] or 0}天\n"
+            # 2026-08-16: pnl/pnl_pct 对未平仓持仓为 NULL, format 会崩
+            # (unsupported format string passed to NoneType.__format__)
+            pnl = r[4] if r[4] is not None else 0.0
+            pct = r[5] if r[5] is not None else 0.0
+            days = r[6] if r[6] is not None else 0
+            result += f"  {r[0]} {r[1]} {r[2]}股 @ {r[3]:.2f}, 盈亏{pnl:+.2f} ({pct:.1f}%) 持仓{days}天\n"
         return result
     except Exception as e:
         return f"成交查询失败: {e}"
@@ -433,7 +438,10 @@ def _quant_decide(symbol: str, action: str, qty: int = 0,
         qty_txt = f"{qty_int}股" if qty_int else "按建议仓位"
         symbol_txt = symbol if symbol and str(symbol).strip() not in ("{symbol}", "") else "该标的"
         reasons = "；".join(r.get("reasons", [])) or "无"
-        return f"{head} {symbol_txt} {action_cn} {qty_txt}\n  依据: {r.get('meaning','')}\n  顾虑: {reasons}"
+        # 停盘提示: 非交易日时附注 (建议层不阻断, 但让用户知道今天不可执行)
+        market_note = "\n  ⏸️ 今日非 A 股交易日（周末/节假日停盘），确认后也无法下单" \
+            if r.get("market_open") is False else ""
+        return f"{head} {symbol_txt} {action_cn} {qty_txt}{market_note}\n  依据: {r.get('meaning','')}\n  顾虑: {reasons}"
     except Exception as e:
         return f"[决策不可用] {e}"
 
