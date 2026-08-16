@@ -52,6 +52,7 @@ FILES = [
     "docs/paper_trading_aris_integration_plan.md",
     "docs/paper_trading_aris_usage.md",
     "docs/paper_trading_strategy_upgrade_plan.md",
+    "docs/paper_trading_strategy_eval_600519.md",
     # 配置
     ".env.example",
 ]
