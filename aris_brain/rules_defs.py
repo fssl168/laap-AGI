@@ -634,7 +634,7 @@ DEFAULT_RULES: List[Rule] = [
             # 注意: 不能含裸 "paper"（会劫持论文规则），用完整词 "paper_trading"/"trading"。
             Rule(
                 name="pt_capability_rule",
-                patterns=["有哪些工具", "有什么功能", "能力清单", "你会什么", "你能做什么", "所有功能", "功能列表", "功能清单", "支持什么"],
+                patterns=["有哪些工具", "有什么功能", "能力清单", "你会什么", "你能做什么", "功能列表", "功能清单", "支持什么", "你有什么工具"],
                 intent="pt_capability",
                 description="paper_trading 能力清单（按分类完整列出）",
                 steps=[
@@ -642,6 +642,28 @@ DEFAULT_RULES: List[Rule] = [
                 ],
                 output_template="🛠️ 交易能力（paper_trading 直连）\n\n功能 | 你说什么 | 我做什么\n查账户 | \"查账户\" / \"账户列表\" | 显示账户信息（单系统单账户）\n查持仓 | \"查看持仓\" / \"我的持仓\" | 当前持仓明细\n看信号 | \"列出信号\" / \"有哪些信号\" | 最近 10 条交易信号\n看订单 | \"订单列表\" | 最近 10 条订单\n看成交 | \"成交记录\" | 最近 10 笔成交\n净值绩效 | \"绩效报告\" / \"盈亏\" | 净值曲线、累计盈亏\n跑回测 | \"跑个回测\" | 策略回测\n风控检查 | \"检查风控\" / \"risk check\" | 挂单数+今日交易数\n系统健康 | \"系统健康\" / \"health\" | 各表记录数、链路状态\n交易决策 | \"帮我看看买什么\" | 规则引擎决策（pt_decide）\n确认下单 | \"确认执行买入 600519\" | 实时取价 → 风控校验 → 下单\n平仓 | \"平掉 XX\" | 卖出持仓\n每日简报 | \"简报\" | 当日交易摘要\n演化治理 | \"演化审计\" | 参数演化记录审查\n\n🧠 认知能力\n记忆：我的记忆层级会随对话沉淀，记得你（丘伟枫）和我们的协作\n情感：有需求（胜任/自主/关联/确定性/意义）和情感状态，每次对话会更新\n自我认知：知道自己是 Aris，认知循环计数在持续积累\n演化：Recursive Self-Improvement——能对自己的交易参数做演化改进\n\n⚠️ 边界\n我是规则引擎驱动的\"哑模型\"：不走 Hermes 的工具循环，所以文件操作、网页搜索、代码执行这类 Hermes 能力我不具备。但交易这条线是我的主场——直接说指令就行，比如\"查看持仓\"。\n\n当前系统状态：\n{health}",
                 min_confidence=0.05,
+            ),
+            # ── 2026-08-16: 自选股列表规则 ──
+            Rule(
+                name="pt_watchlist_rule",
+                patterns=["列出我的自选股", "我的自选股", "自选股列表", "自选股有哪些", "看看自选股", "watchlist", "自选股"],
+                intent="pt_watchlist",
+                description="列出我的自选股（读 .env STOCK_LIST）",
+                steps=[
+                    RuleStep(tool="pt_watchlist", params={}, output_key="result"),
+                ],
+                output_template="{result}",
+            ),
+            # ── 2026-08-16: 个股资料规则 ──
+            Rule(
+                name="pt_profile_rule",
+                patterns=["个股资料", "股票资料", "公司资料", "资料详情", "基本情况", "股票概况", "profile", "个股信息", "公司概况", "查一下资料", "查资料", "查股票", "看看资料", "介绍下", "介绍一下", "查查", "查一下"],
+                intent="pt_profile",
+                description="查询个股资料（行业/市值/主营等）",
+                steps=[
+                    RuleStep(tool="pt_profile", params={"symbol": "{symbol}"}, output_key="result"),
+                ],
+                output_template="{result}",
             ),
 ]
 

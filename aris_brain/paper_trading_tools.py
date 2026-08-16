@@ -62,6 +62,10 @@ def _run(action: str, **kwargs) -> str:
             return _brief(conn)
         elif action == "evolution_audit":
             return _evolution_audit()
+        elif action == "watchlist":
+            return _watchlist()
+        elif action == "profile":
+            return _profile(kwargs.get("symbol", ""))
         else:
             return f"未知操作: {action}"
     except Exception as e:
@@ -342,6 +346,59 @@ def _evolution_audit() -> str:
         return f"进化审计查询失败: {e}"
 
 
+def _watchlist() -> str:
+    """列出自选股 (读取 .env 的 STOCK_LIST, 契约单源)。"""
+    try:
+        import os
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(LAAP_ROOT, ".env"))
+        raw = os.environ.get("STOCK_LIST", "") or ""
+        codes = [c.strip() for c in raw.split(",") if c.strip()]
+        if not codes:
+            return "暂无自选股（.env 未配置 STOCK_LIST）"
+        result = f"📋 自选股列表 ({len(codes)} 只):\n"
+        for i, c in enumerate(codes, 1):
+            result += f"  {i}. {c}\n"
+        return result.rstrip()
+    except Exception as e:
+        return f"自选股查询失败: {e}"
+
+
+def _profile(symbol: str = "") -> str:
+    """个股资料查询 (复用 news_intel.fetch_stock_profile, fail-closed)。"""
+    try:
+        if not symbol or str(symbol).strip() in ("{symbol}", ""):
+            return "请提供股票代码，如 '列出 600519 个股资料'"
+        from laap.paper_trading.news_intel import fetch_stock_profile
+        prof, meta = fetch_stock_profile(str(symbol).strip())
+        if prof is None:
+            fallback = "（数据源降级/不可用）" if meta.get("used_fallback") else ""
+            return f"未获取到 {symbol} 个股资料{fallback}"
+        p = prof.to_dict()
+        lines = [f"📄 {p.get('company_name', symbol)} ({symbol}) 个股资料"]
+        if p.get("industry"):
+            lines.append(f"  行业: {p['industry']}")
+        if p.get("list_date"):
+            lines.append(f"  上市: {p['list_date']}")
+        if p.get("total_mv"):
+            lines.append(f"  总市值: {p['total_mv']}")
+        if p.get("float_mv"):
+            lines.append(f"  流通市值: {p['float_mv']}")
+        if p.get("total_share"):
+            lines.append(f"  总股本: {p['total_share']}")
+        if p.get("float_share"):
+            lines.append(f"  流通股本: {p['float_share']}")
+        if p.get("registered_capital"):
+            lines.append(f"  注册资本: {p['registered_capital']}")
+        if p.get("main_business"):
+            lines.append(f"  主营业务: {str(p['main_business'])[:80]}")
+        if meta.get("used_fallback"):
+            lines.append("  ⚠️ 数据源降级（stub/缓存）")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"个股资料查询失败: {e}"
+
+
 # ─── Phase 1 新增: 学习/识别类只读工具 (方案 v2.0 §4.2.1) ─────
 
 def _lessons(conn) -> str:
@@ -529,6 +586,8 @@ PAPER_TRADING_TOOLS: Dict[str, Dict[str, Any]] = {
     # Phase 3 新增 (方案 v2.0 §4.4): 管理闭环工具
     "pt_brief": {"fn": lambda: _run("brief"), "desc": "每日交易简报"},
     "pt_evolution_audit": {"fn": lambda: _run("evolution_audit"), "desc": "进化治理提案"},
+    "pt_watchlist": {"fn": lambda: _run("watchlist"), "desc": "列出我的自选股"},
+    "pt_profile": {"fn": lambda symbol: _run("profile", symbol=symbol), "desc": "个股资料查询"},
 }
 
 
