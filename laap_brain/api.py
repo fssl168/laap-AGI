@@ -1856,6 +1856,8 @@ def create_app() -> web.Application:
 def main():
     # 统一端口约定: 默认 11546 (与 Docker / README / .env.example / MCP 客户端一致)
     port = int(os.environ.get("LAAP_PORT", "11546"))
+    # 2026-08-16 调试: 打印解释器信息到日志 (统一 venv 环境排查用, 后续可移除)
+    logger.info("LAAP main() interpreter: sys.executable=%s", sys.executable)
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])
 

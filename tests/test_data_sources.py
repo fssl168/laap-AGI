@@ -15,9 +15,10 @@ def test_source_chain_default(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     assert source_chain("PROFILE") == ["individual_info", "em_profile", "cninfo"]
     assert source_chain("MARKET") == ["akshare", "tx", "xq", "stub"]
-    assert source_chain("KLINE") == ["db", "tushare", "akshare", "synthetic"]
+    assert source_chain("KLINE") == ["db", "tushare", "tencent", "akshare",
+                                     "synthetic"]
     assert source_chain("NEWS") == ["eastmoney", "sina", "cls", "tushare",
-                                    "bocha", "tavily", "minimax"]
+                                    "bocha", "tavily", "minimax", "tencent"]
     assert source_chain("CALENDAR") == ["external", "cache", "weekday"]
 
 
@@ -81,6 +82,30 @@ def test_resolve_first_with_meta_fail_closed():
     assert result is None
     assert meta["used_fallback"] is True
     assert "fallback_reason" in meta
+
+
+def test_resolve_first_with_meta_no_data_flag():
+    """NoDataError（源可用但无数据）→ meta.no_data=True，区别于网络降级。"""
+    from laap.paper_trading.data_sources import NoDataError
+
+    def a():
+        raise NoDataError("no data")
+    result, meta = resolve_first_with_meta(
+        "PROFILE", {"individual_info": a})
+    assert result is None
+    assert meta["used_fallback"] is True
+    assert meta["no_data"] is True
+
+
+def test_resolve_first_with_meta_network_error_not_no_data():
+    """网络/服务错误 → meta.no_data=False（供上层区分提示）。"""
+    def a():
+        raise ConnectionError("net down")
+    result, meta = resolve_first_with_meta(
+        "PROFILE", {"individual_info": a})
+    assert result is None
+    assert meta["used_fallback"] is True
+    assert meta["no_data"] is False
 
 
 def test_resolve_first_skips_unimplemented_source():

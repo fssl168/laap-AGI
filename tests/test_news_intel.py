@@ -370,7 +370,12 @@ def test_json_parse_list_loose():
 
 
 def test_tushare_ohlcv_parse(monkeypatch):
-    """Tushare daily K线解析（mock urllib urlopen）。"""
+    """Tushare daily K线解析（mock urllib urlopen）。
+
+    2026-08-16 起 _load_tushare_ohlcv 按 Tushare 真实返回语义处理：
+    items 为**降序（最新在前）**，取最近 N 条后反转成升序。
+    mock 数据按降序给出（20260815 在前），期望升序末条 close=102。
+    """
     import json as _json
     import os
     import urllib.request
@@ -378,8 +383,8 @@ def test_tushare_ohlcv_parse(monkeypatch):
     monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
     payload = _json.dumps({"data": {
         "fields": ["trade_date", "open", "high", "low", "close", "vol"],
-        "items": [["20260814", 100.0, 102.0, 99.0, 101.0, 1000.0],
-                  ["20260815", 101.0, 103.0, 100.0, 102.0, 1200.0]]}}).encode()
+        "items": [["20260815", 101.0, 103.0, 100.0, 102.0, 1200.0],   # 最新在前
+                  ["20260814", 100.0, 102.0, 99.0, 101.0, 1000.0]]}}).encode()
 
     class _Resp:
         def __enter__(self): return self
@@ -390,7 +395,8 @@ def test_tushare_ohlcv_parse(monkeypatch):
     ohlcv = ks._load_tushare_ohlcv("600519", 10)
     monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
     assert len(ohlcv) == 2
-    assert ohlcv[-1][1] == 102.0  # close
+    assert ohlcv[-1][1] == 102.0  # close（升序末条 = 最新 20260815）
+    assert ohlcv[0][1] == 101.0   # 升序首条 = 20260814
 
 
 # ── Tushare 新闻快讯（_news_tushare）──
@@ -471,3 +477,72 @@ def test_fetch_stock_news_via_tushare(monkeypatch):
     assert items[0].source == "tushare"
     assert meta["source"] == "tushare"
     assert meta["used_fallback"] is False  # tushare 为链首位，未回退
+
+
+# ════════════════════════════════════════════════════════════
+# 代码规范化（'600511.SH'/'SH600511' → 裸 6 位，东财接口只收裸代码）
+# ════════════════════════════════════════════════════════════
+
+def test_normalize_symbol():
+    from laap.paper_trading.news_intel import _normalize_symbol
+    assert _normalize_symbol("600511.SH") == "600511"
+    assert _normalize_symbol("000523.SZ") == "000523"
+    assert _normalize_symbol("600511.sh") == "600511"   # 小写
+    assert _normalize_symbol("SH600511") == "600511"    # 前缀式
+    assert _normalize_symbol("sz000523") == "000523"
+    assert _normalize_symbol("600519") == "600519"      # 裸代码原样
+    assert _normalize_symbol("") == ""
+
+
+def test_fetch_reports_normalizes_suffixed_symbol(_stub_ak, monkeypatch):
+    """'600114.SH' → 东财接口收到裸 '600114'，返回模型 symbol 为裸代码。"""
+    seen = {}
+    orig = _stub_ak.stock_research_report_em
+
+    def _wrap(symbol):
+        seen["symbol"] = symbol
+        return orig(symbol)
+    monkeypatch.setattr(_stub_ak, "stock_research_report_em", _wrap)
+    reports, meta = fetch_research_reports("600114.SH", max_results=5)
+    assert seen["symbol"] == "600114"
+    assert meta["used_fallback"] is False
+    assert reports and reports[0].symbol == "600114"
+
+
+def test_fetch_profile_normalizes_suffixed_symbol(_stub_ak, monkeypatch):
+    seen = {}
+    orig = _stub_ak.stock_individual_info_em
+
+    def _wrap(symbol):
+        seen["symbol"] = symbol
+        return orig(symbol)
+    monkeypatch.setattr(_stub_ak, "stock_individual_info_em", _wrap)
+    prof, meta = fetch_stock_profile("600519.SH")
+    assert seen["symbol"] == "600519"
+    assert prof is not None and prof.symbol == "600519"
+
+
+def test_fetch_news_normalizes_suffixed_symbol(_stub_ak, monkeypatch):
+    seen = {}
+    orig = _stub_ak.stock_news_em
+
+    def _wrap(symbol):
+        seen["symbol"] = symbol
+        return orig(symbol)
+    monkeypatch.setattr(_stub_ak, "stock_news_em", _wrap)
+    items, meta = fetch_stock_news("600519.SH")
+    assert seen["symbol"] == "600519"
+    assert items and items[0].symbol == "600519"
+
+
+def test_fetch_reports_no_data_flag(_stub_ak, monkeypatch):
+    """主源无数据（NoDataError）→ meta.no_data=True（区别于网络降级）。"""
+    from laap.paper_trading.data_sources import NoDataError
+
+    def _empty(symbol, max_results):
+        raise NoDataError(f"eastmoney no reports for {symbol}")
+    monkeypatch.setattr(news_intel, "_reports_eastmoney", _empty)
+    reports, meta = fetch_research_reports("600519")
+    assert reports == []
+    assert meta["no_data"] is True
+    assert meta["used_fallback"] is True

@@ -5,7 +5,7 @@ paper_trading 工具包 — LAAP内部实现
 直接操作paper_trading.db数据库（零账户概念，单系统）。
 """
 
-import sys, os, json
+import sys, os, json, logging, time, hashlib
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any
@@ -14,6 +14,10 @@ import sqlite3
 # LAAP paper_trading路径
 LAAP_ROOT = r"D:\laap-AGI"
 DB_PATH = r"D:\laap-AGI\data\paper_trading.db"
+# 研报 md 源文件输出目录（YYYYMMDD_板块.md，量化按日期/板块读取）
+REPORT_DIR = os.path.join(LAAP_ROOT, "report")
+
+logger = logging.getLogger("aris_brain.paper_trading_tools")
 
 if LAAP_ROOT not in sys.path:
     sys.path.insert(0, LAAP_ROOT)
@@ -396,6 +400,11 @@ def _profile(symbol: str = "") -> str:
             lines.append(f"  注册资本: {p['registered_capital']}")
         if p.get("main_business"):
             lines.append(f"  主营业务: {str(p['main_business'])[:80]}")
+            # 2026-08-16: 主营业务截断后附东财 F10 详情链接（点击查看完整内容）
+            _code = f"SH{symbol}" if str(symbol).startswith(("6", "9")) else f"SZ{symbol}"
+            lines.append(
+                f"  🔗 详情: https://emweb.securities.eastmoney.com/PC_HSF10/"
+                f"CompanySurvey/Index?type=web&code={_code}")
         if meta.get("used_fallback"):
             lines.append("  ⚠️ 数据源降级（stub/缓存）")
         return "\n".join(lines)
@@ -403,71 +412,382 @@ def _profile(symbol: str = "") -> str:
         return f"个股资料查询失败: {e}"
 
 
-def _sector_reports(sector: str = "") -> str:
-    """行业/板块研报: 对自选股池拉研报, 按板块关键词过滤聚合。
+def _sector_kw_tokens(kw: str) -> list:
+    """复合板块关键词拆解：整词 + 2 字滑动窗口子词（去重保序）。
 
-    真实环境 (用户机器, akshare 可达): fetch_research_reports 多源链
-    (eastmoney→cls→sina) 返回个股研报; 按标题/机构含板块关键词过滤。
-    沙箱/离线: 源失败 → used_fallback, 返回提示 (fail-closed, 不伪造)。
+    例：'新能源材料' → ['新能源材料','新能','能源','源材','材料']。
+    仅对长度 ≥4 的关键词展开（'白酒'/'机器人' 等短词保持整词精确匹配，
+    避免过度放宽）。供板块研报在整词未命中时按相关子词聚合（如研报标题
+    只含 '新能源' 或 '材料'）。
+    """
+    kw = str(kw or "").strip()
+    tokens = [kw]
+    if len(kw) >= 4:
+        tokens += [kw[i:i + 2] for i in range(len(kw) - 1)]
+    seen = []
+    for t in tokens:
+        if t and t not in seen:
+            seen.append(t)
+    return seen
+
+
+# ── 板块→典型公司名映射（研报标题常不含板块词但含公司名，命中即视为板块）──
+_SECTOR_COMPANIES = {
+    "白酒": ["茅台", "五粮液", "泸州老窖", "洋河", "汾酒", "古井", "今世缘", "舍得", "酒鬼", "水井坊", "金种子", "迎驾"],
+    "白酒股": ["茅台", "五粮液", "泸州老窖", "洋河", "汾酒", "古井", "今世缘", "舍得", "酒鬼", "水井坊"],
+    "新能源": ["宁德", "比亚迪", "隆基", "阳光电源", "亿纬", "赣锋", "天齐", "通威", "晶澳"],
+    "新能源车": ["比亚迪", "宁德", "理想", "蔚来", "小鹏", "赛力斯", "长安汽车"],
+    "半导体": ["中芯", "韦尔", "北方华创", "中微", "兆易", "澜起", "寒武纪", "海光"],
+    "人工智能": ["科大讯飞", "海康", "大华", "昆仑万维", "三六零", "商汤"],
+    "医药": ["恒瑞", "药明", "迈瑞", "爱尔", "片仔癀", "云南白药", "复星医药"],
+    "券商": ["中信证券", "东方财富", "华泰", "国泰君安", "招商证券"],
+    "银行": ["招商银行", "工商银行", "建设银行", "农业银行", "兴业银行", "平安银行"],
+    "军工": ["中航", "航天", "中国船舶", "航发"],
+}
+
+# 结构化研报进程内缓存（sector_kw → (ts, text)）
+_SECTOR_REPORT_CACHE: Dict[str, tuple] = {}
+_SECTOR_REPORT_TTL = 1800
+# 研报输出字符上限（用户要求 ≤2000 字）
+MAX_SECTOR_REPORT_CHARS = 2000
+
+
+def _truncate_report(text: str, limit: int = MAX_SECTOR_REPORT_CHARS) -> str:
+    """硬截断兜底：超限时保留前 limit 字符并标注。"""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…（超长已截断）"
+
+
+def _clip(s: str, n: int) -> str:
+    """按字符截断并加省略号（防截断处误导）。"""
+    s = str(s or "")
+    return s if len(s) <= n else s[:n] + "…"
+
+
+# 研报落库 schema（sector_reports 表，report_hash=sha1(content) 主键，幂等）
+_SECTOR_REPORT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sector_reports (
+    report_hash TEXT PRIMARY KEY,
+    sector TEXT NOT NULL,
+    content TEXT NOT NULL,
+    file_path TEXT DEFAULT '',
+    char_count INTEGER DEFAULT 0,
+    created_ts REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sector_reports_sector ON sector_reports(sector);
+CREATE INDEX IF NOT EXISTS idx_sector_reports_created ON sector_reports(created_ts);
+"""
+
+
+def _sector_report_filename(sector: str) -> str:
+    """研报源文件名：YYYYMMDD_板块.md（板块名做文件系统安全清洗，量化按日期/板块读取）。"""
+    import re as _re
+    safe = _re.sub(r'[\\/:*?"<>|\s]+', "_", str(sector or "").strip()) or "unknown"
+    return f"{datetime.now().strftime('%Y%m%d')}_{safe}.md"
+
+
+def _persist_sector_report(sector: str, content: str) -> tuple:
+    """研报落库（sha1 哈希主键）+ md 源文件保存 report/。
+
+    Returns: (report_hash, fname)；失败返回 (hash, "")（best-effort，不阻塞返回）。
+    同内容哈希去重：内容不变不重复写盘/入库。
+    """
+    report_hash = hashlib.sha1(content.encode("utf-8")).hexdigest()
+    fname = _sector_report_filename(sector)
+    try:
+        Path(REPORT_DIR).mkdir(parents=True, exist_ok=True)
+        fpath = os.path.join(REPORT_DIR, fname)
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.write(content + "\n")
+        try:
+            conn = _db()
+            try:
+                conn.executescript(_SECTOR_REPORT_SCHEMA)
+                conn.execute(
+                    "INSERT OR IGNORE INTO sector_reports "
+                    "(report_hash, sector, content, file_path, char_count, created_ts) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (report_hash, sector, content, fpath, len(content), time.time()))
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"_persist_sector_report db failed: {e}")
+        return report_hash, fname
+    except Exception as e:
+        logger.warning(f"_persist_sector_report failed: {e}")
+        return report_hash, ""
+
+
+def _collect_sector_evidence(sector_kw: str, tokens: list,
+                             company_hits: list) -> Dict[str, Any]:
+    """拉自选股池研报并按板块词/典型公司名过滤，返回证据字典（fail-closed）。"""
+    from laap.paper_trading.news_intel import fetch_research_reports
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(LAAP_ROOT, ".env"))
+    raw = os.environ.get("STOCK_LIST", "") or ""
+    codes = [c.strip() for c in raw.split(",") if c.strip()]
+    ev: Dict[str, Any] = {"sector_kw": sector_kw, "tokens": tokens,
+                          "codes": codes, "matched": [],
+                          "matched_tokens": set(),
+                          "degraded_codes": [], "no_data_codes": []}
+    for code in codes:
+        try:
+            reports, meta = fetch_research_reports(code, max_results=5)
+            if meta.get("used_fallback") and not reports:
+                # 区分「数据源降级」与「该股无研报」：no_data=True 表示源可用但无数据
+                if meta.get("no_data"):
+                    ev["no_data_codes"].append(code)
+                else:
+                    ev["degraded_codes"].append(code)
+            for r in reports:
+                blob = (r.title or "") + (r.org or "") + (r.rating or "")
+                hit_tokens = [t for t in tokens if t in blob]
+                hit_companies = [c for c in company_hits if c in blob]
+                if hit_tokens or hit_companies:
+                    ev["matched"].append({"symbol": code, "title": (r.title or ""),
+                                          "org": r.org, "rating": r.rating,
+                                          "date": r.date})
+                    ev["matched_tokens"].update(hit_tokens)
+                    ev["matched_tokens"].update(hit_companies)
+        except Exception:
+            continue  # 单只失败跳过, 不中断
+    return ev
+
+
+def _build_sector_llm_call():
+    """板块研报 LLM 合成器（惰性构建）。
+
+    `LAAP_SECTOR_REPORT_LLM=0` 关闭（确定性兜底）；构建失败/不可用 → None。
+    """
+    if os.environ.get("LAAP_SECTOR_REPORT_LLM", "1") == "0":
+        return None
+    try:
+        from laap.paper_trading.llm_sources import build_llm_call
+        return build_llm_call()
+    except Exception as e:
+        logger.warning(f"_build_sector_llm_call unavailable: {e}")
+        return None
+
+
+def _synthesize_sector_logic(sector_kw: str, ev: Dict[str, Any],
+                             llm_call) -> str:
+    """一、板块定位与核心驱动：LLM 合成；不可用 → 确定性兜底（fail-closed，不伪造）。"""
+    try:
+        if llm_call is None:
+            raise RuntimeError("llm unavailable")
+        syms = sorted({m["symbol"] for m in ev["matched"]})
+        lines = [f"板块: {sector_kw}",
+                 f"自选股池命中 {len(syms)} 只标的: {', '.join(syms)}"]
+        for m in ev["matched"][:8]:
+            lines.append(f"- {m['symbol']} {m['title'][:60]} ({m['org']})")
+        prompt = (
+            "你是A股行业研究员。基于以下自选股池研报证据，输出一段「板块定位与核心驱动」"
+            "分析（产业逻辑、供需格局、驱动因素），**全段控制在 150 字以内**。"
+            "只依据提供证据与通用行业认知，禁止编造具体数据或证据外的标的；"
+            "若证据覆盖有限，须明确说明'自选股池覆盖有限'。\n\n"
+            + "\n".join(lines))
+        text = llm_call(prompt, system="只输出分析正文，不输出标题/序号/多余解释。",
+                        max_tokens=600)
+        text = (text or "").strip()
+        if len(text) < 40:
+            raise RuntimeError("llm output too short")
+        return _truncate_report(text, 160)
+    except Exception as e:
+        logger.warning(f"_synthesize_sector_logic fallback: {e}")
+        n = len(ev["matched"])
+        syms = sorted({m["symbol"] for m in ev["matched"]})
+        return (f"自选股池命中 {n} 条研报、{len(syms)} 只标的；产业逻辑自动梳理"
+                f"暂不可用，以下为证据层与框架层梳理。")
+
+
+def _format_sector_report_full(sector_kw: str, ev: Dict[str, Any],
+                               llm_call=None) -> str:
+    """四段式结构化研报：一、板块定位与核心驱动；二、关键细分方向梳理（证据）；
+    三、选股/选赛道框架；四、风险提示。结果按 sector_kw 缓存 TTL。"""
+    hit = _SECTOR_REPORT_CACHE.get(sector_kw)
+    if hit and (time.time() - hit[0]) < _SECTOR_REPORT_TTL:
+        return hit[1]
+
+    matched = ev["matched"]
+    # 证据按标的分组（公司/行业 best-effort 取自个股资料，失败不阻塞）
+    from laap.paper_trading.news_intel import fetch_stock_profile
+    by_symbol: Dict[str, Any] = {}
+    for m in matched:
+        sym = m["symbol"]
+        g = by_symbol.setdefault(sym, {"reports": [], "company": "", "industry": ""})
+        g["reports"].append(m)
+        if not g["company"]:
+            try:
+                prof, _ = fetch_stock_profile(sym)
+                if prof:
+                    g["company"] = prof.company_name or ""
+                    g["industry"] = prof.industry or ""
+            except Exception:
+                pass
+
+    title = f"# 🤖「{sector_kw}」板块研报（自选股池聚合, {len(matched)} 条）"
+    if set(ev["tokens"]) - {sector_kw}:
+        hit_sub = sorted(t for t in ev["matched_tokens"] if t != sector_kw)
+        if hit_sub:
+            title += f"（关键词拆解命中：{'/'.join(hit_sub)}）"
+
+    # 一、板块定位与核心驱动
+    sec1 = _synthesize_sector_logic(sector_kw, ev, llm_call)
+
+    # 二、关键细分方向梳理（自选股池研报证据，≤6 条控字数）
+    sec2_lines = []
+    budget = 6
+    total_reports = len(matched)
+    for sym, g in by_symbol.items():
+        head = f"### {sym}" + (f" {_clip(g['company'], 12)}" if g["company"] else "")
+        if g.get("industry"):
+            head += f"（{_clip(g['industry'], 14)}）"
+        sec2_lines.append(head)
+        for r in g["reports"][:budget]:
+            meta = " | ".join(x for x in (r.get("org"), r.get("rating"),
+                                          str(r.get("date", ""))[:10]) if x)
+            sec2_lines.append(f"- {_clip(r['title'], 28)}" + (f"　{meta}" if meta else ""))
+            budget -= 1
+        if budget <= 0:
+            break
+    if budget <= 0 and total_reports > 6:
+        sec2_lines.append(f"（其余 {total_reports - 6} 条略）")
+    if len(by_symbol) <= 1:
+        sec2_lines.append("（⚠️ 自选股池内直接相关标单一，覆盖有限，需人工补源）")
+
+    # 三、当前阶段的选股/选赛道框架
+    sec3_lines = [
+        "三层筛选：①供需格局（竞争格局好/出清尾声，证据内买入增持占比高者优先）；"
+        "②盈利弹性（成本降、价格钝化的盈利修复环节）；③技术溢价（确定性技术打底 + 主题技术埋伏渗透率拐点）。",
+    ]
+    ratings = [m.get("rating", "") for m in matched if m.get("rating")]
+    if ratings:
+        bull = sum(1 for r in ratings if any(k in r for k in ("买入", "增持", "推荐", "买")))
+        sec3_lines.append(f"（证据内评级口径：{bull}/{len(ratings)} 条偏多）")
+
+    # 四、风险提示（编号连续）
+    sec4_lines = [
+        "终端需求（下游放量/宏观）不及预期；",
+        "产能出清慢于预期、加工费继续下探；",
+        "技术路线切换的资产减值风险；",
+        "海外关税/贸易政策超预期收紧。",
+    ]
+    if ev["degraded_codes"]:
+        sec4_lines.append(
+            f"⚠️ 部分数据源降级/不可用（{len(ev['degraded_codes'])} 只标的，未纳入证据）。")
+    if ev["no_data_codes"]:
+        sec4_lines.append(
+            f"ℹ️ {len(ev['no_data_codes'])} 只标的暂无研报（源可用但无数据）。")
+    sec4 = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(sec4_lines))
+
+    footer = ("\n> 数据来源：自选股池研报（东财源，实拉）+ 个股资料；产业逻辑由 LLM 合成"
+              "（不可用时为确定性兜底）。本报告为研究参考，不构成投资建议。")
+    out = "\n\n".join([
+        title,
+        "## 一、板块定位与核心驱动\n" + sec1,
+        "## 二、关键细分方向梳理（自选股池研报证据）\n" + "\n".join(sec2_lines),
+        "## 三、当前阶段的选股/选赛道框架\n" + "\n".join(sec3_lines),
+        "## 四、风险提示\n" + sec4,
+        footer,
+    ])
+    out = _truncate_report(out, MAX_SECTOR_REPORT_CHARS)  # 硬上限 ≤2000 字
+    # 研报落库（sha1 哈希）+ md 源文件保存 report/（best-effort，不阻塞返回）
+    try:
+        _hash, _fname = _persist_sector_report(sector_kw, out)
+        if _fname:
+            out = _truncate_report(
+                out + f"\n> 📁 已保存 {os.path.join('report', _fname)}（hash={_hash[:8]}）",
+                MAX_SECTOR_REPORT_CHARS)
+    except Exception as e:
+        logger.warning(f"sector report persist failed: {e}")
+    _SECTOR_REPORT_CACHE[sector_kw] = (time.time(), out)
+    return out
+
+
+def _sector_reports(sector: str = "") -> str:
+    """行业/板块研报: 对自选股池拉研报, 按板块关键词过滤聚合，输出四段式结构化研报。
+
+    一、板块定位与核心驱动（LLM 合成，不可用则确定性兜底）
+    二、关键细分方向梳理（自选股池研报证据，按标的分组）
+    三、当前阶段的选股/选赛道框架
+    四、风险提示（含数据覆盖诚实标注）
+
+    复合板块名（如 '新能源材料'）整词未命中时，按 2 字窗口子词 OR 匹配
+    （'新能源'/'材料' 等）；典型公司名命中视为板块命中。沙箱/离线: 源失败 →
+    used_fallback，返回提示 (fail-closed, 不伪造)。
     """
     try:
         if not sector or str(sector).strip() in ("{sector}", ""):
             return "请提供行业/板块名，如 '列出 白酒 行业板块研报'"
         sector_kw = str(sector).strip()
-        from laap.paper_trading.news_intel import fetch_research_reports
-        import os
-        from dotenv import load_dotenv
-        load_dotenv(os.path.join(LAAP_ROOT, ".env"))
-        raw = os.environ.get("STOCK_LIST", "") or ""
-        codes = [c.strip() for c in raw.split(",") if c.strip()]
-        if not codes:
-            return "自选股池为空（.env 未配置 STOCK_LIST），无法聚合行业研报"
-
-        matched = []
-        fallback = False
-        for code in codes:
-            try:
-                reports, meta = fetch_research_reports(code, max_results=5)
-                if meta.get("used_fallback"):
-                    fallback = True
-                for r in reports:
-                    title = (r.title or "")
-                    org = (r.org or "")
-                    if sector_kw in title or sector_kw in org or sector_kw in (r.rating or ""):
-                        matched.append({"symbol": code, "title": title,
-                                        "org": org, "rating": r.rating,
-                                        "date": r.date})
-            except Exception:
-                continue  # 单只失败跳过, 不中断
-
-        if not matched:
-            note = "（数据源降级/不可用）" if fallback else ""
+        # 短窗口缓存优先（避免重复拉研报 + LLM 合成）
+        hit = _SECTOR_REPORT_CACHE.get(sector_kw)
+        if hit and (time.time() - hit[0]) < _SECTOR_REPORT_TTL:
+            return hit[1]
+        tokens = _sector_kw_tokens(sector_kw)
+        company_hits = _SECTOR_COMPANIES.get(sector_kw, [])
+        ev = _collect_sector_evidence(sector_kw, tokens, company_hits)
+        if not ev["matched"]:
+            notes = []
+            if ev["degraded_codes"]:
+                notes.append(f"部分数据源降级/不可用（{len(ev['degraded_codes'])} 只标的）")
+            if ev["no_data_codes"]:
+                notes.append(f"{len(ev['no_data_codes'])} 只标的暂无研报")
+            note = f"（{'；'.join(notes)}）" if notes else ""
             return f"自选股池未找到与「{sector_kw}」相关的研报{note}"
-
-        lines = [f"📑 「{sector_kw}」板块研报（自选股池聚合, {len(matched)} 条）:"]
-        for m in matched[:10]:
-            lines.append(f"  • {m['symbol']} {m['title'][:45]}")
-            if m.get("org"):
-                lines.append(f"    {m['org']}{' ' + m['rating'] if m['rating'] else ''}"
-                             f"{' (' + str(m['date'])[:10] + ')' if m['date'] else ''}")
-        if fallback:
-            lines.append("  ⚠️ 部分数据源降级（stub/缓存）")
-        return "\n".join(lines)
+        llm_call = _build_sector_llm_call()
+        return _format_sector_report_full(sector_kw, ev, llm_call)
     except Exception as e:
         return f"行业研报查询失败: {e}"
 
 
 def _news(symbol: str = "", max_results: int = 5) -> str:
-    """个股新闻查询 (复用 news_intel.fetch_stock_news 多源链, fail-closed)。"""
+    """个股新闻查询：**数据库 news_items 优先**，实时源兜底 (fail-closed)。
+
+    2026-08-16 修改：原实现只走 fetch_stock_news 多源链，实时源全挂时
+    （sina 'list' bug / cls 404 / 各源无 key）返回"未获取到"——但数据库
+    news_items 里明明有日终管线存的新闻。改为数据库优先：有数据直接回，
+    无数据才尝试实时抓取。
+    """
     try:
         if not symbol or str(symbol).strip() in ("{symbol}", ""):
             return "请提供股票代码，如 '查询 600519 个股新闻'"
+        sym = str(symbol).strip()
+        conn = _db()
+        try:
+            # 数据库优先：news_items 按 symbol 匹配（含标题/内容里的股票名）
+            rows = conn.execute(
+                """SELECT symbol, title, content, source, published_at
+                   FROM news_items
+                   WHERE symbol = ? OR title LIKE ? OR content LIKE ?
+                   ORDER BY published_at DESC
+                   LIMIT ?""",
+                (sym, f"%{sym}%", f"%{sym}%", max_results),
+            ).fetchall()
+        finally:
+            conn.close()
+        if rows:
+            lines = [f"📰 {sym} 最近新闻（{len(rows)} 条，数据库）:"]
+            for i, r in enumerate(rows, 1):
+                title = (r["title"] or "").strip()
+                if not title:
+                    continue
+                ts = str(r["published_at"] or "")[:16].replace("T", " ")
+                src = r["source"] or "未知"
+                lines.append(f"  {i}. {title[:50]}")
+                if ts:
+                    lines.append(f"     [{src}] {ts}")
+            return "\n".join(lines)
+
+        # 数据库无数据 → 实时源兜底
         from laap.paper_trading.news_intel import fetch_stock_news
-        items, meta = fetch_stock_news(str(symbol).strip(), max_results=max_results)
+        items, meta = fetch_stock_news(sym, max_results=max_results)
         if not items:
             fallback = "（数据源降级/不可用）" if meta.get("used_fallback") else ""
-            return f"未获取到 {symbol} 的新闻{fallback}"
-        lines = [f"📰 {symbol} 最近新闻（{len(items)} 条）:"]
+            return f"未获取到 {sym} 的新闻{fallback}"
+        lines = [f"📰 {sym} 最近新闻（{len(items)} 条）:"]
         for i, it in enumerate(items, 1):
             title = (it.title or "").strip()
             if not title:

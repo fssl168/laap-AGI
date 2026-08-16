@@ -105,8 +105,13 @@ class PsiCoreLauncher:
     def _start_python_subprocess(self) -> bool:
         """启动 Python PSI Core 作为独立子进程（与 Rust 模式一致）。"""
         try:
+            # 2026-08-16: 不用 sys.executable——nssm 服务(LocalSystem)环境下
+            # venv python 的 sys.executable 解析成 uv 裸 python (pyvenv.cfg home 指向
+            # uv), 导致 PSI 子进程用错解释器 (实测: venv 父进程 fork 出 uv 子进程监听
+            # 11546, 统一环境诉求落空)。硬编码 LAAP venv python。
+            _py = r"D:\laap-AGI\.venv\Scripts\python.exe"
             self._process = subprocess.Popen(
-                [sys.executable, "-m", "psi_core.runner", str(self.state_dir), "100"],
+                [_py, "-m", "psi_core.runner", str(self.state_dir), "100"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 creationflags=subprocess.CREATE_NO_WINDOW,
