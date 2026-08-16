@@ -93,3 +93,6 @@ paper_trading/
 .sync_review_*/
 aris_brain/laap_semantic_memory.json
 aris_brain/memory_hierarchy.json
+
+# ========== 文档（本地维护，不进 git/远端，NAS 同步） ==========
+docs/
