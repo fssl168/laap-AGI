@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""上传 4 个修复文件到 NAS: 备份 → 上传 → md5 归一化校验。
-覆盖: aris_brain/paper_trading_tools.py(新增), rules_defs.py, rules_tools.py, laap_brain/api.py
+"""上传修复文件到 NAS: 备份 → 上传 → md5 归一化校验。
+覆盖 (2026-08-16 修订): pt_* 工具/rules_defs/rules_tools/规则引擎 qty 修复/
+交易日门 quant_bridge/记忆双写超时/相关测试/使用指南/实施计划
 """
 import hashlib, os, time, paramiko
 
@@ -11,10 +12,39 @@ LOCAL_ROOT = r"D:\laap-AGI"
 STAMP = time.strftime("%Y%m%d_%H%M%S")
 
 FILES = [
+    # 规则层 + API (已入库)
     "aris_brain/paper_trading_tools.py",
     "aris_brain/rules_defs.py",
     "aris_brain/rules_tools.py",
+    "aris_brain/rules_engine.py",
+    "aris_brain/longform_synthesizer.py",
+    "laap/agi/cognitive_bus.py",
+    "laap/agi/tool_router.py",
     "laap_brain/api.py",
+    # paper_trading 本地资产 (NAS 主存储)
+    "laap/paper_trading/quant_bridge.py",
+    "laap/paper_trading/memory_bridge.py",
+    "laap/paper_trading/quant_config.py",
+    "laap/paper_trading/trading_self.py",
+    "laap/paper_trading/paper_service.py",
+    # 测试
+    "tests/test_quant_bridge_phase1.py",
+    "tests/test_quant_bridge_phase2.py",
+    "tests/test_quant_bridge_phase3.py",
+    "tests/test_trading_day_gate.py",
+    "tests/test_ledger_fees.py",
+    "tests/test_paper_e2e.py",
+    "tests/test_trading_self.py",
+    "tests/test_laap_tools.py",
+    "tests/test_data_sources.py",
+    "tests/test_paper_phase4.py",
+    "tests/test_market_source.py",
+    "tests/test_api_security.py",
+    # 文档
+    "docs/paper_trading_aris_integration_plan.md",
+    "docs/paper_trading_aris_usage.md",
+    # 配置
+    ".env.example",
 ]
 
 def md5_norm(data: bytes) -> str:
