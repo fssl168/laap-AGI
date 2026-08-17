@@ -11,7 +11,6 @@ import re
 import sys
 import urllib.request
 
-sys.path.insert(0, r"D:\leanpython\daily_stock_analysis")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 REFLECT = "http://localhost:11546/v1/reflect"
@@ -21,10 +20,15 @@ INDICES = [("000001", "上证指数"), ("399001", "深证成指"), ("399006", "�
 _WEEKDAYS = "一二三四五六日"
 
 
+def _fetch_url(url: str, timeout: int = 15) -> bytes:
+    """标准库 urllib 拉取（2026-08-17：替换已不存在的 src.agent.tools.search_tools._fetch_url）。"""
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
 def fetch_market():
     """腾讯行情：拉三大指数，返回 (data_date, indices)。"""
-    from src.agent.tools.search_tools import _fetch_url
-
     q = ",".join(("sh" + c if c.startswith("0") else "sz" + c) for c, _ in INDICES)
     raw = _fetch_url(f"http://qt.gtimg.cn/q={q}", timeout=15).decode("gbk", errors="ignore")
     rows = {}

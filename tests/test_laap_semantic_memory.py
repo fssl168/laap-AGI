@@ -44,8 +44,10 @@ def test_bare_deepseek_key_does_not_select_api_provider(monkeypatch):
     """回归：只有 DEEPSEEK_API_KEY、无 OPENAI_BASE_URL 时，不得选 API 嵌入器。"""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
     assert not isinstance(_get_embedding_provider(), OpenAIEmbeddingProvider)
-    # 无 OPENAI_BASE_URL → 不走 API，落到本地 sentence-transformers (bge-small-zh)
-    assert isinstance(_get_embedding_provider(), SentenceTransformersProvider)
+    # 无 OPENAI_BASE_URL → 不走 API，落到本地 provider
+    # （sentence-transformers 首选；无该依赖的环境回退 TF-IDF 兜底——两者都是本地，非 API）
+    assert isinstance(_get_embedding_provider(),
+                      (SentenceTransformersProvider, TfidfEmbeddingProvider))
 
 
 def test_openai_key_selects_api_provider(monkeypatch):
@@ -62,5 +64,6 @@ def test_deepseek_key_with_explicit_base_selects_api_provider(monkeypatch):
 
 
 def test_no_keys_falls_back_to_local_provider():
-    """无任何 key 时回退到本地嵌入模型（bge-small-zh, 512维）。"""
-    assert isinstance(_get_embedding_provider(), SentenceTransformersProvider)
+    """无任何 key 时回退到本地嵌入（bge-small-zh；无 sentence_transformers 则 TF-IDF 兜底）。"""
+    assert isinstance(_get_embedding_provider(),
+                      (SentenceTransformersProvider, TfidfEmbeddingProvider))

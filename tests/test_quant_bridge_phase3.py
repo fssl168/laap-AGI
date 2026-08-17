@@ -62,7 +62,11 @@ def test_phase3_zero_dangling(registry):
 # 2. 简报工具
 # ════════════════════════════════════════════════════════════
 
-def test_brief_returns_structure(registry):
+def test_brief_returns_structure(registry, monkeypatch, tmp_path):
+    # 沙箱挂载盘（9p）SQLite 写会 disk I/O error：注入 tmp 可写 DB 路径，
+    # 让 PaperDB 幂等建表（net_values 等），工具才能查询并输出"净值"。
+    import aris_brain.paper_trading_tools as ptt
+    monkeypatch.setattr(ptt, "DB_PATH", str(tmp_path / "pt.db"))
     out = registry.get("pt_brief")()
     assert isinstance(out, str)
     assert "简报" in out

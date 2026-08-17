@@ -34,10 +34,8 @@ def test_script_compiles():
 
 
 def test_fetch_market_parses(script_mod):
-    """mock 腾讯响应：正确解析指数行情。"""
-    from src.agent.tools import search_tools
-
-    with patch.object(search_tools, "_fetch_url", return_value=SAMPLE_RAW):
+    """mock 腾讯响应：正确解析指数行情（2026-08-17：mock 脚本自身 _fetch_url，不再依赖 src）。"""
+    with patch.object(script_mod, "_fetch_url", return_value=SAMPLE_RAW):
         indices = script_mod.fetch_market()
 
     assert len(indices) == 1

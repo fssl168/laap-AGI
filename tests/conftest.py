@@ -2,9 +2,13 @@
 
 - laap_api_live: 要求 localhost:11546 运行 LAAP daemon；未运行则跳过网络测试。
 """
+import os
 import urllib.request
 
 import pytest
+
+# 测试隔离：存储后端强制 sqlite（不连 NAS PG16）
+os.environ.setdefault("PAPER_TRADING_DB_BACKEND", "sqlite")
 
 LAAP_API_BASE = "http://localhost:11546"
 

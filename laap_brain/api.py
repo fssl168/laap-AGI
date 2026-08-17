@@ -532,8 +532,19 @@ def process_with_laap(messages: list, model: str = "laap-core") -> dict:
         h in user_msg.lower() for h in _SYSTEM_INJECTION_HINTS
     )
     try:
-        if _is_system_injection:
-            logger.info("RulesEngine skipped: system-injected message (%s)", user_msg[:80])
+        # 规则引擎仅对 laap-core 本体生效（2026-08-17 修复）：
+        # 非 laap-core 模型（laap-rules 等显式模型）跳过规则引擎，交给
+        # handle_chat_completions 的 tool_router 路由工具——对称设计
+        # （laap-core：规则优先，未命中走 LLM 兜底不路由工具；非 laap-core：路由工具）。
+        # 此前规则引擎对任意 model 无条件拦截（如"查茅台股价"命中 pt_profile_rule
+        # → rules:* 短路），tool_router 永远轮不到，违反"tool_router 仅对非 laap-core 生效"约定。
+        _is_laap_core = str(model).lower() in ("laap-core", "laap", "")
+        if _is_system_injection or not _is_laap_core:
+            if not _is_laap_core:
+                logger.info("RulesEngine skipped: non-laap-core model %s (%s)",
+                            model, user_msg[:60])
+            else:
+                logger.info("RulesEngine skipped: system-injected message (%s)", user_msg[:80])
         else:
             # aris_rules_engine 已是包内模块(相对导入), 需把 LAAP_ROOT 入 path 按包导入
             sys.path.insert(0, str(LAAP_ROOT))

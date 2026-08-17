@@ -13,7 +13,17 @@ import sqlite3
 
 # LAAP paper_trading路径
 LAAP_ROOT = r"D:\laap-AGI"
-DB_PATH = r"D:\laap-AGI\data\paper_trading.db"
+# 动态解析 paper_trading.db（2026-08-17）：优先 PAPER_TRADING_DB_PATH env，否则项目根 data/。
+# 此前硬编码 `D:\laap-AGI\data\paper_trading.db` 在非 Windows 环境被当相对路径 → 指向错误位置。
+# 测试可通过 monkeypatch DB_PATH 覆盖（如 tmp 路径）。
+def _default_paper_db_path() -> str:
+    env_path = os.environ.get("PAPER_TRADING_DB_PATH", "")
+    if env_path:
+        return env_path
+    return str(Path(__file__).resolve().parent.parent / "data" / "paper_trading.db")
+
+
+DB_PATH = _default_paper_db_path()
 # 研报 md 源文件输出目录（YYYYMMDD_板块.md，量化按日期/板块读取）
 REPORT_DIR = os.path.join(LAAP_ROOT, "report")
 
@@ -24,10 +34,22 @@ if LAAP_ROOT not in sys.path:
 
 
 def _db() -> sqlite3.Connection:
-    """获取数据库连接。"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """获取 paper_trading.db 连接（复用 PaperDB：幂等建 schema + 可注入 DB_PATH）。
+
+    修复（2026-08-17）：
+      - 用模块级 DB_PATH（测试可 monkeypatch 为 tmp 路径；默认 PaperDB 动态解析同源）。
+      - 挂载盘（9p）/ 只读环境建表失败时降级为裸连接（尽力而为，工具容错返回），
+        避免 schema 初始化失败把"可读查询"也打断。
+    """
+    from laap.paper_trading.db import PaperDB
+    try:
+        db = PaperDB(db_path=DB_PATH)
+        return db.conn()
+    except Exception as e:
+        logger.warning(f"paper_trading_tools._db schema init failed, raw connect: {e}")
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 
 def _run(action: str, **kwargs) -> str:

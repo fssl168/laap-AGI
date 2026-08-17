@@ -32,10 +32,8 @@ def test_script_compiles():
 
 
 def test_fetch_market_mock(script_mod):
-    """mock 腾讯响应：解析出行情数据与数据日期。"""
-    from src.agent.tools import search_tools
-
-    with patch.object(search_tools, "_fetch_url", return_value=SAMPLE_RAW):
+    """mock 腾讯响应：解析出行情数据与数据日期（2026-08-17：mock 脚本自身 _fetch_url）。"""
+    with patch.object(script_mod, "_fetch_url", return_value=SAMPLE_RAW):
         data_date, indices = script_mod.fetch_market()
 
     assert data_date == "20260811"
