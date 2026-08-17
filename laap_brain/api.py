@@ -175,6 +175,36 @@ def _start_news_worker() -> Optional[Any]:
     return _news_worker
 
 
+# 事件驱动编排器 (LAAP_EVENT_DRIVEN=1 启用, 2026-08-17)
+_event_orchestrator: Optional[Any] = None
+
+
+def _start_event_orchestrator() -> Optional[Any]:
+    """启动事件驱动编排器 (LAAP_EVENT_DRIVEN=1 显式开启, 默认关闭)。
+
+    行情事件源 (轮询四源 → tick 事件 + 缓存 + 故障检测) + 场景订阅器
+    (tick 盯盘/涨停捕捉/集合竞价/故障报告/状态/内部消息/交易通知)。
+    """
+    global _event_orchestrator
+    if _event_orchestrator is not None:
+        return _event_orchestrator
+    if os.environ.get("LAAP_EVENT_DRIVEN", "") != "1":
+        return None
+    try:
+        from laap.paper_trading.event_orchestrator import EventOrchestrator
+        symbols = _news_symbols()
+        interval = float(os.environ.get("MARKET_EVENT_INTERVAL", "5"))
+        _event_orchestrator = EventOrchestrator(
+            symbols=symbols, interval=interval)
+        _event_orchestrator.start()
+        logger.info(f"EventOrchestrator started (LAAP_EVENT_DRIVEN=1, "
+                    f"symbols={len(symbols)}, interval={interval}s)")
+    except Exception as e:
+        logger.warning(f"EventOrchestrator failed to start: {e}")
+        _event_orchestrator = None
+    return _event_orchestrator
+
+
 def _get_code_evolution_engine() -> Optional[Any]:
     """获取代码进化引擎单例 (M3)。
 
@@ -1393,6 +1423,19 @@ async def handle_quant_strategies(request):
         return web.json_response({"error": "internal error"}, status=500)
 
 
+async def handle_quant_events_status(request):
+    """GET /v1/quant/events/status — 事件驱动编排器状态 (2026-08-17)。"""
+    try:
+        orch = _event_orchestrator
+        if orch is None:
+            return web.json_response({"running": False,
+                                      "hint": "set LAAP_EVENT_DRIVEN=1 to enable"})
+        return web.json_response(orch.status())
+    except Exception as e:
+        logger.warning(f"quant_events_status failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
 async def handle_quant_daily_cycle(request):
     """POST /v1/quant/daily_cycle — 日终闭环（真实K线→信号→交易自我审核→交易→净值）。
 
@@ -1926,6 +1969,7 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/quant/lessons", handle_quant_lessons)
     app.router.add_get("/v1/quant/self/status", handle_quant_self_status)
     app.router.add_get("/v1/quant/strategies", handle_quant_strategies)
+    app.router.add_get("/v1/quant/events/status", handle_quant_events_status)
     app.router.add_post("/v1/quant/daily_cycle", handle_quant_daily_cycle)
     app.router.add_post("/v1/quant/apply_params", handle_quant_apply_params)
     app.router.add_post("/v1/quant/evolve", handle_quant_evolve)
@@ -1975,6 +2019,8 @@ def main():
     _start_quant_daily_scheduler()
     # 新闻盘中轮询 (LAAP_NEWS_INTRADAY=1 时)
     _start_news_worker()
+    # 事件驱动编排器 (LAAP_EVENT_DRIVEN=1 时, 2026-08-17)
+    _start_event_orchestrator()
 
     app = create_app()
     logger.info(f"LAAP Brain API starting on {host}:{port}")
