@@ -516,9 +516,53 @@ class MetaLearningEngine:
 
     def save(self, path: str = None):
         path = path or os.environ.get("LAAP_STATE_PATH", "./agi_state/meta_learning.json")
-        """持久化元学习状态"""
+        """持久化元学习状态
+
+        2026-08-17: DB 主存 (laap.db / PG16 laap 库); JSON 文件兼容双写。
+        """
+        # ── DB 主存 ──
+        try:
+            from laap.agi.cognitive_db import upsert, set_meta
+            from laap.agi.meta_session_db import save_session_records
+            # sessions → meta_sessions 表
+            save_session_records([s for s in self.sessions[-100:]])
+            # strategy_efficacy → 表
+            for key, eff in self.strategy_efficacy.items():
+                d = eff.to_dict()
+                strategy = d.get("strategy", key)
+                domain = d.get("domain", "general")
+                upsert("strategy_efficacy", {
+                    "strategy": strategy, "domain": domain,
+                    "avg_gain_rate": d.get("avg_gain", 0.0),
+                    "avg_retention": d.get("avg_retention", 0.0),
+                    "times_used": d.get("times_used", 0),
+                    "success_rate": d.get("success_rate", 0.0),
+                    "best_diff_min": d.get("difficulty_range", [0.1, 0.9])[0],
+                    "best_diff_max": d.get("difficulty_range", [0.1, 0.9])[1],
+                    "last_used": getattr(eff, "last_used", 0.0),
+                })
+            # transfers → 表
+            for t in self.transfers[-50:]:
+                upsert("knowledge_transfers", {
+                    "source_domain": t.source_domain,
+                    "target_domain": t.target_domain,
+                    "source_concept": t.source_concept,
+                    "target_concept": t.target_concept,
+                    "similarity": t.similarity,
+                    "transfer_effect": t.transfer_effect,
+                    "confidence": t.confidence,
+                    "discovered_at": t.discovered_at,
+                })
+            # 计数器
+            set_meta("total_sessions", self._total_sessions)
+            set_meta("strategy_switches", self._strategy_switches)
+            set_meta("transfer_discoveries", self._transfer_discoveries)
+            logger.info("[MetaLearningEngine] 保存到关系库")
+        except Exception as e:
+            logger.warning(f"[MetaLearningEngine] DB save failed (fallback JSON): {e}")
+        # ── JSON 兼容双写 ──
         data = {
-            "sessions": [s.to_dict() for s in self.sessions[-100:]],  # 只保留最近100条
+            "sessions": [s.to_dict() for s in self.sessions[-100:]],
             "strategy_efficacy": {k: v.to_dict() for k, v in self.strategy_efficacy.items()},
             "transfers": [t.to_dict() for t in self.transfers[-50:]],
             "total_sessions": self._total_sessions,
@@ -532,7 +576,58 @@ class MetaLearningEngine:
 
     def load(self, path: str = None):
         path = path or os.environ.get("LAAP_STATE_PATH", "./agi_state/meta_learning.json")
-        """加载元学习状态"""
+        """加载元学习状态
+
+        2026-08-17: DB 主存优先; JSON 文件兼容回退。
+        """
+        # ── DB 主存 ──
+        try:
+            from laap.agi.cognitive_db import fetch_all, get_meta
+            db_sessions = fetch_all("meta_sessions", limit=200)
+            db_efficacy = fetch_all("strategy_efficacy", limit=200)
+            db_transfers = fetch_all("knowledge_transfers", limit=200)
+            if db_sessions or db_efficacy or db_transfers:
+                # sessions 恢复
+                from laap.agi.meta_session_db import load_session_records
+                loaded = load_session_records(limit=200)
+                if loaded:
+                    self.sessions = list(loaded)
+                # efficacy 恢复
+                for r in db_efficacy:
+                    key = f"{r.get('strategy','')}:{r.get('domain','general')}"
+                    self.strategy_efficacy[key] = StrategyEfficacy(
+                        strategy=LearningStrategy(r.get("strategy", "structured")),
+                        domain=r.get("domain", "general"),
+                        avg_gain_rate=float(r.get("avg_gain_rate", 0.0)),
+                        avg_retention=float(r.get("avg_retention", 0.0)),
+                        times_used=int(r.get("times_used", 0)),
+                        success_rate=float(r.get("success_rate", 0.0)),
+                        best_difficulty_range=(float(r.get("best_diff_min", 0.1)),
+                                               float(r.get("best_diff_max", 0.9))),
+                        last_used=float(r.get("last_used", 0.0)),
+                    )
+                # transfers 恢复
+                from laap.agi.meta_learning import KnowledgeTransfer
+                for r in db_transfers:
+                    self.transfers.append(KnowledgeTransfer(
+                        source_domain=r.get("source_domain", ""),
+                        target_domain=r.get("target_domain", ""),
+                        source_concept=r.get("source_concept", ""),
+                        target_concept=r.get("target_concept", ""),
+                        similarity=float(r.get("similarity", 0.0)),
+                        transfer_effect=float(r.get("transfer_effect", 0.0)),
+                        confidence=float(r.get("confidence", 0.5)),
+                        discovered_at=float(r.get("discovered_at", 0.0)),
+                    ))
+                # 计数器
+                self._total_sessions = get_meta("total_sessions", self._total_sessions)
+                self._strategy_switches = get_meta("strategy_switches", self._strategy_switches)
+                self._transfer_discoveries = get_meta("transfer_discoveries", self._transfer_discoveries)
+                logger.info("[MetaLearningEngine] 关系库加载完成")
+                return True
+        except Exception as e:
+            logger.warning(f"[MetaLearningEngine] DB load failed (fallback JSON): {e}")
+        # ── JSON 兼容回退 ──
         p = Path(path)
         if not p.exists():
             return False

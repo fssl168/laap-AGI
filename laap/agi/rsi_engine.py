@@ -624,6 +624,9 @@ class RSIMetaEngine:
     def save(self, path: Optional[str] = None) -> None:
         """持久化RSI状态（完整字段 + schema 版本）。
 
+        2026-08-17: 主存迁移到关系库 (laap.db / PG16 laap 库的 rsi_* 表);
+        JSON 文件保留双写(兼容旧代码/降级读取)。
+
         Args:
             path: 状态文件路径。为 None 时使用 ``LAAP_HOME/rsi_engine.json``，
                   ``LAAP_HOME`` 未设置则落到 ``~/.laap/rsi_engine.json``。
@@ -674,6 +677,21 @@ class RSIMetaEngine:
             for g in self.goals.values()
         ]
 
+        # ── DB 主存 (2026-08-17) ──
+        try:
+            from laap.agi.cognitive_db import upsert
+            for name, pd in parameters_state.items():
+                upsert("rsi_params", dict(pd))
+            for ad in attempts_state:
+                upsert("rsi_attempts", dict(ad))
+            for gd in goals_state:
+                upsert("rsi_goals", dict(gd))
+            logger.info(
+                f"[RSIMetaEngine] 保存到关系库: {len(parameters_state)} params, "
+                f"{len(attempts_state)} attempts, {len(goals_state)} goals")
+        except Exception as e:
+            logger.warning(f"[RSIMetaEngine] DB save failed (fallback JSON): {e}")
+
         data = {
             "version": RSI_STATE_SCHEMA_VERSION,
             "parameters": parameters_state,
@@ -694,6 +712,8 @@ class RSIMetaEngine:
     def load(self, path: Optional[str] = None) -> bool:
         """加载RSI状态（完整恢复参数、历史、目标）。
 
+        2026-08-17: 优先从关系库 (rsi_* 表) 恢复; JSON 文件兼容回退。
+
         Args:
             path: 状态文件路径。为 None 时使用 ``LAAP_HOME/rsi_engine.json``。
 
@@ -702,6 +722,73 @@ class RSIMetaEngine:
         """
         if path is None:
             path = _default_state_path("rsi_engine.json")
+
+        # ── ① DB 主存优先 (2026-08-17) ──
+        try:
+            from laap.agi.cognitive_db import fetch_all, fetch_where
+            db_params = fetch_all("rsi_params", limit=200)
+            db_attempts = fetch_all("rsi_attempts", limit=200)
+            db_goals = fetch_all("rsi_goals", limit=200)
+            if db_params or db_attempts or db_goals:
+                loaded_any = False
+                for pd in db_params:
+                    if pd.get("name") in self.parameters:
+                        p_obj = self.parameters[pd["name"]]
+                        p_obj.current_value = float(pd.get("current_value", p_obj.current_value))
+                        p_obj.min_value = float(pd.get("min_value", p_obj.min_value))
+                        p_obj.max_value = float(pd.get("max_value", p_obj.max_value))
+                        p_obj.step_size = float(pd.get("step_size", p_obj.step_size))
+                        p_obj.description = pd.get("description", p_obj.description)
+                        p_obj.last_optimized = float(pd.get("last_optimized", 0.0))
+                        p_obj.optimization_count = int(pd.get("optimization_count", 0))
+                        try:
+                            p_obj.performance_history = list(json.loads(
+                                pd.get("performance_history") or "[]"))
+                        except Exception:
+                            p_obj.performance_history = []
+                        loaded_any = True
+                self.attempts = []
+                for ad in db_attempts:
+                    self.attempts.append(SelfImprovementAttempt(
+                        id=ad.get("id", ""), target=ad.get("target", ""),
+                        category=ad.get("category", "psi"),
+                        old_value=float(ad.get("old_value", 0.0)),
+                        new_value=float(ad.get("new_value", 0.0)),
+                        rationale=ad.get("rationale", ""),
+                        expected_improvement=float(ad.get("expected_improvement", 0.0)),
+                        actual_improvement=float(ad.get("actual_improvement", 0.0)),
+                        success=bool(ad.get("success", False)),
+                        reverted=bool(ad.get("reverted", False)),
+                        timestamp=float(ad.get("timestamp", time.time())),
+                        evaluation_period=float(ad.get("evaluation_period", 3600.0)),
+                    ))
+                    loaded_any = True
+                self.goals = {}
+                for gd in db_goals:
+                    g = LearningGoal(
+                        id=gd.get("id", ""), description=gd.get("description", ""),
+                        domain=gd.get("domain", "general"),
+                        target_mastery=float(gd.get("target_mastery", 0.8)),
+                        current_mastery=float(gd.get("current_mastery", 0.0)),
+                        priority=float(gd.get("priority", 0.5)),
+                        strategy=gd.get("strategy", "structured"),
+                        motivation=gd.get("motivation", ""),
+                        status=gd.get("status", "proposed"),
+                        created_at=float(gd.get("created_at", time.time())),
+                        deadline=float(gd["deadline"]) if gd.get("deadline") else None,
+                    )
+                    if g.id:
+                        self.goals[g.id] = g
+                        loaded_any = True
+                if loaded_any:
+                    logger.info(
+                        f"[RSIMetaEngine] 关系库加载完成: {len(db_params)} params, "
+                        f"{len(self.attempts)} attempts, {len(self.goals)} goals")
+                    return True
+        except Exception as e:
+            logger.warning(f"[RSIMetaEngine] DB load failed (fallback JSON): {e}")
+
+        # ── ② JSON 兼容回退 ──
         p = Path(path)
         if not p.exists():
             return False

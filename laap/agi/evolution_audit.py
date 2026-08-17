@@ -59,6 +59,19 @@ class EvolutionAuditLog:
             entry["status"] = mutation.get("status", "")
         if meta:
             entry["meta"] = meta
+        # ── DB 主存 (2026-08-17) ──
+        try:
+            from laap.agi.cognitive_db import upsert
+            row = {
+                "ts": entry["ts"], "decision": entry["decision"],
+                "reason": entry["reason"], "mutation_id": entry["mutation_id"],
+                "target": entry["target"], "status": entry["status"],
+                "meta": json.dumps(entry.get("meta", {}), ensure_ascii=False, default=str),
+            }
+            upsert("evolution_audit", row)
+        except Exception as e:
+            logger.warning(f"Evolution audit DB write failed: {e}")
+        # ── JSON 兼容双写 ──
         try:
             with open(self._path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
@@ -100,7 +113,34 @@ class EvolutionAuditLog:
     # ════════════════════════════════════════════════════════
 
     def query(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """读取最近 N 条审计记录 (倒序)。"""
+        """读取最近 N 条审计记录 (倒序)。
+
+        2026-08-17: DB 主存优先; JSON 文件兼容回退。
+        """
+        # ── DB 主存 ──
+        try:
+            from laap.agi.cognitive_db import fetch_all
+            rows = fetch_all("evolution_audit", limit=limit)
+            if rows:
+                entries = []
+                for r in rows:
+                    e = {
+                        "ts": r.get("ts", 0.0), "decision": r.get("decision", ""),
+                        "reason": r.get("reason", ""),
+                        "mutation_id": r.get("mutation_id", ""),
+                        "target": r.get("target", ""), "status": r.get("status", ""),
+                    }
+                    meta = r.get("meta")
+                    if meta:
+                        try:
+                            e["meta"] = json.loads(meta) if isinstance(meta, str) else meta
+                        except json.JSONDecodeError:
+                            e["meta"] = meta
+                    entries.append(e)
+                return entries[:limit]
+        except Exception as e:
+            logger.warning(f"Evolution audit DB query failed (fallback JSON): {e}")
+        # ── JSON 兼容回退 ──
         if not self._path.exists():
             return []
         entries = []

@@ -149,3 +149,67 @@ def record_to_sqlite(meta_engine, tool_name: str, success: bool,
         insert_session(record, db_path=db_path)
     except Exception:
         pass  # 记录失败静默，不干扰主流程
+
+
+def save_session_records(records, db_path: str = None) -> int:
+    """批量保存学习会话记录到 meta_sessions 表 (2026-08-17)。
+
+    records: LearningSessionRecord 列表; 走 cognitive_db 双后端(PG/SQLite)。
+    """
+    try:
+        from laap.agi.cognitive_db import upsert
+        for r in records:
+            upsert("meta_sessions", {
+                "id": getattr(r, "id", ""),
+                "concept": getattr(r, "concept", ""),
+                "strategy": (r.strategy.value if hasattr(r.strategy, "value")
+                             else str(getattr(r, "strategy", ""))),
+                "domain": getattr(r, "domain", "general"),
+                "duration_minutes": float(getattr(r, "duration_minutes", 0.0)),
+                "mastery_before": float(getattr(r, "mastery_before", 0.0)),
+                "mastery_after": float(getattr(r, "mastery_after", 0.0)),
+                "gain": float(getattr(r, "gain", 0.0)),
+                "successful": 1 if getattr(r, "successful", False) else 0,
+                "timestamp": float(getattr(r, "timestamp", time.time())),
+                "notes": getattr(r, "notes", ""),
+            })
+        return len(records)
+    except Exception as e:
+        logger = __import__("logging").getLogger("meta_session_db")
+        logger.warning(f"save_session_records failed: {e}")
+        return 0
+
+
+def load_session_records(limit: int = 200, db_path: str = None):
+    """从 meta_sessions 表读取学习会话记录 (2026-08-17)。
+
+    返回 LearningSessionRecord 列表; 走 cognitive_db 双后端。
+    """
+    try:
+        from laap.agi.cognitive_db import fetch_all
+        rows = fetch_all("meta_sessions", limit=limit)
+        from laap.agi.meta_learning import LearningSessionRecord, LearningStrategy
+        out = []
+        for r in rows:
+            try:
+                strat = LearningStrategy(r.get("strategy", "structured"))
+            except ValueError:
+                strat = LearningStrategy.STRUCTURED
+            out.append(LearningSessionRecord(
+                id=r.get("id", ""), concept=r.get("concept", ""),
+                strategy=strat, domain=r.get("domain", "general"),
+                duration_minutes=float(r.get("duration_minutes", 0.0)),
+                mastery_before=float(r.get("mastery_before", 0.0)),
+                mastery_after=float(r.get("mastery_after", 0.0)),
+                gain=float(r.get("gain", 0.0)),
+                gain_rate=0.0,
+                difficulty=0.5,
+                successful=bool(r.get("successful", False)),
+                timestamp=float(r.get("timestamp", time.time())),
+                notes=r.get("notes", ""),
+            ))
+        return out
+    except Exception as e:
+        logger = __import__("logging").getLogger("meta_session_db")
+        logger.warning(f"load_session_records failed: {e}")
+        return []
