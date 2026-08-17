@@ -79,7 +79,7 @@ def main():
                              ix.get("high", ix["price"]), ix.get("low", ix["price"]),
                              ix.get("volume", 0)))
             n = upsert_kline(rows)
-            print(f"[存储] 指数日K已落盘 {n} 条 -> data/watchlist_kline/kline.db")
+            print(f"[存储] 指数日K已落盘 {n} 条 -> data/watchlist_kline_store.db")
         except Exception as exc:  # noqa: BLE001
             print(f"[存储] 指数落盘失败: {exc}")
 

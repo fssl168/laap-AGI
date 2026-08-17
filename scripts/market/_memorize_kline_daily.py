@@ -4,7 +4,7 @@ from pathlib import Path
 
 1) 拉取 42 只自选股最近 60 根日 K（腾讯行情，免费无需 key）
    —— 并发 ≤2、批间随机冷却（防 IP 拉黑）
-2) 完整日 K 落盘 SQLite（data/watchlist_kline/kline.db，趋势分析用）
+2) 完整日 K 落盘 SQLite（data/watchlist_kline_store.db，趋势分析用）
 3) 当日摘要写入 LAAP 语义记忆（日常回顾用）
 4) 召回验证，输出摘要（供 cron 交付）
 
@@ -218,7 +218,7 @@ def main():
     # 完整日 K 落盘 SQLite
     try:
         n = persist_kline(rows_by_code)
-        print(f"[存储] 已落盘 {n} 条日K记录 -> data/watchlist_kline/kline.db")
+        print(f"[存储] 已落盘 {n} 条日K记录 -> data/watchlist_kline_store.db")
         # 顺带保存股票名称映射（单请求，供「名称+代码」展示）
         from watchlist_kline_store import upsert_stock_names
 

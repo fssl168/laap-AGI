@@ -3,7 +3,7 @@
 元学习会话 SQLite 持久化
 ========================
 学习会话除 JSON 持久化（agi_state/meta_learning.json）外，同时写入
-SQLite（agi_state/meta_sessions.db），便于按领域查询/统计
+SQLite（data/laap.db 的 meta_sessions 表, 2026-08-17 起），便于按领域查询/统计
 （如验证 coding/intent 领域的会话积累情况）。
 
 对标 laap/paper_trading/db.py 的 sqlite3 风格：标准库、零新依赖、
@@ -15,7 +15,13 @@ from pathlib import Path
 
 
 def _default_db_path() -> str:
-    return "./agi_state/meta_sessions.db"
+    """meta_sessions 库路径: 统一到 data/laap.db (2026-08-17 迁移)。
+
+    原 agi_state/meta_sessions.db 已备份为 .bak_20260817; 与 laap.db
+    (meta_sessions 主库) 对齐, 数据在 data/laap.db 的 meta_sessions 表。
+    """
+    from pathlib import Path
+    return str(Path(__file__).resolve().parents[2] / "data" / "laap.db")
 
 
 _SCHEMA = """

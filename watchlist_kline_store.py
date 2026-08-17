@@ -29,7 +29,7 @@ from pathlib import Path
 
 logger = logging.getLogger("watchlist_kline_store")
 
-DB_PATH = Path(__file__).resolve().parent / "data" / "watchlist_kline" / "kline.db"
+DB_PATH = Path(__file__).resolve().parent / "data" / "watchlist_kline_store.db"
 
 # 后端选择：KLINE_DB_BACKEND 或继承 DATABASE_URL 存在性
 _BACKEND = os.environ.get("KLINE_DB_BACKEND", "postgres")
@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS stock_names (
     code    TEXT PRIMARY KEY,
     name    TEXT NOT NULL,
     updated TEXT
+);
+
+-- 交易日历缓存 (2026-08-17: 替代 data/trading_calendar.json)
+CREATE TABLE IF NOT EXISTS trading_calendar (
+    key      TEXT PRIMARY KEY,      -- 'dates' | 'synced_at'
+    value    TEXT NOT NULL
 );
 """
 
@@ -278,3 +284,46 @@ def get_stock_names(codes: list = None) -> dict:
         return {c: n for c, n in cur.fetchall()}
     finally:
         conn.close()
+
+
+# ── 交易日历缓存 (2026-08-17: 替代 data/trading_calendar.json) ──
+
+def save_trading_calendar(dates: set, synced_at: str = "") -> None:
+    """保存交易日历到 trading_calendar 表。
+
+    key='dates'     → JSON 数组字符串
+    key='synced_at' → 同步时间戳
+    """
+    import json
+    init_db()
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO trading_calendar (key, value) VALUES (?, ?)",
+            ("dates", json.dumps(sorted(dates), ensure_ascii=False)),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO trading_calendar (key, value) VALUES (?, ?)",
+            ("synced_at", synced_at or ""),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_trading_calendar() -> tuple:
+    """读取交易日历缓存。返回 (dates_set, synced_at)；无数据返回 (None, '')。"""
+    import json
+    init_db()
+    conn = _connect()
+    try:
+        rows = dict(conn.execute("SELECT key, value FROM trading_calendar").fetchall())
+    finally:
+        conn.close()
+    if "dates" not in rows:
+        return None, ""
+    try:
+        dates = set(json.loads(rows["dates"]))
+    except Exception:
+        return None, ""
+    return dates, rows.get("synced_at", "")

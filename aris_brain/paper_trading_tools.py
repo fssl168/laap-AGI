@@ -2,7 +2,7 @@
 """
 paper_trading 工具包 — LAAP内部实现
 
-直接操作paper_trading.db数据库（零账户概念，单系统）。
+直接操作 laap_trading.db 数据库（零账户概念，单系统）。
 """
 
 import sys, os, json, logging, time, hashlib
@@ -13,14 +13,14 @@ import sqlite3
 
 # LAAP paper_trading路径
 LAAP_ROOT = r"D:\laap-AGI"
-# 动态解析 paper_trading.db（2026-08-17）：优先 PAPER_TRADING_DB_PATH env，否则项目根 data/。
-# 此前硬编码 `D:\laap-AGI\data\paper_trading.db` 在非 Windows 环境被当相对路径 → 指向错误位置。
+# 动态解析 laap_trading.db（2026-08-17）：优先 PAPER_TRADING_DB_PATH env，否则项目根 data/。
+# 此前硬编码 `D:\laap-AGI\data\laap_trading.db` 在非 Windows 环境被当相对路径 → 指向错误位置。
 # 测试可通过 monkeypatch DB_PATH 覆盖（如 tmp 路径）。
 def _default_paper_db_path() -> str:
     env_path = os.environ.get("PAPER_TRADING_DB_PATH", "")
     if env_path:
         return env_path
-    return str(Path(__file__).resolve().parent.parent / "data" / "paper_trading.db")
+    return str(Path(__file__).resolve().parent.parent / "data" / "laap_trading.db")
 
 
 DB_PATH = _default_paper_db_path()
@@ -34,7 +34,7 @@ if LAAP_ROOT not in sys.path:
 
 
 def _db() -> sqlite3.Connection:
-    """获取 paper_trading.db 连接（复用 PaperDB：幂等建 schema + 可注入 DB_PATH）。
+    """获取 laap_trading.db 连接（复用 PaperDB：幂等建 schema + 可注入 DB_PATH）。
 
     修复（2026-08-17）：
       - 用模块级 DB_PATH（测试可 monkeypatch 为 tmp 路径；默认 PaperDB 动态解析同源）。

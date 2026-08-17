@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """本地 laap-AGI/data/ 目录 → NAS 同步
 
-内容: paper_trading.db / trading_calendar.json / watchlist_kline/*
+内容: laap_trading.db / trading_calendar.json(兼容) / watchlist_kline_store.db
 """
 import hashlib
 import os
@@ -13,9 +13,9 @@ NAS_ROOT = "/vol1/@appdata/trim.hermes/workspace/laap-AGI"
 LOCAL_ROOT = r"D:\laap-AGI"
 
 FILES = [
-    "data/paper_trading.db",
+    "data/laap_trading.db",
     "data/trading_calendar.json",
-    "data/watchlist_kline/kline.db",
+    "data/watchlist_kline_store.db",
     "data/watchlist_kline/candidates_10d.png",
     "data/watchlist_kline/kline_3y.png",
     "data/watchlist_kline/kline_lastweek.png",

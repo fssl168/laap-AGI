@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from laap.agi.meta_learning import MetaLearningEngine
 
-DB = "D:/laap-AGI/agi_state/meta_sessions.db"
+DB = "D:/laap-AGI/data/laap.db"
 
 conn = sqlite3.connect(DB)
 rows = conn.execute(

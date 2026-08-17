@@ -119,13 +119,13 @@
   - `laap_brain/`：API / 工具 / 装配
   - `aris_brain/`：认知桥 / 情感 / 目标引擎
   - `psi_core/`：PSI 内核
-- 数据：`data/paper_trading.db`（paper 账本）、`data/watchlist_kline/kline.db`（真实 K 线）
+- 数据：`data/laap_trading.db`（paper 账本）、`data/watchlist_kline/kline.db`（真实 K 线）
 - 量化文档：`docs/news-intel-closed-loop-implementation-plan.md`（闭环计划）、`docs/phase2-multi-factor-strategy-plan.md`（多因子）、`docs/rsi-paper-evidence-verification.md`（论文证据）
 
 ### 4.1 板块研报产物约定（量化读取口径）
 
 - **md 源文件**：板块研报生成后输出到 `report/YYYYMMDD_板块_<hash8>.md`（内容 sha1 前 8 位作后缀）。量化读取约定：**按日期前缀过滤当天、按板块名过滤、同板块多版本按文件名哈希区分**（同内容同哈希 → 同名覆盖去重；不同内容 → 同日多版本并存）。板块名做文件系统安全清洗（空格/`/\:*?"<>|` → `_`）。
-- **DB 索引**：`data/paper_trading.db` 的 `sector_reports` 表提供研报**全量历史与内容哈希索引**（`report_hash` = sha1(content) 主键；`sector` / `created_ts` 建索引；字段：report_hash/sector/content/file_path/char_count/created_ts）。
+- **DB 索引**：`data/laap_trading.db` 的 `sector_reports` 表提供研报**全量历史与内容哈希索引**（`report_hash` = sha1(content) 主键；`sector` / `created_ts` 建索引；字段：report_hash/sector/content/file_path/char_count/created_ts）。
 - **模板**：`report/report.md` 是研报输出的**模板文件**（四段式格式样例：一、板块定位与核心驱动；二、关键细分方向梳理；三、当前阶段的选股/选赛道框架；四、风险提示）。生成研报须对齐该模板结构。
 - **输出约束**：研报总字符 ≤2000 字；返回文本末尾附 `> 📁 已保存 report/<文件名>（hash=xxxxxxxx）` 提示（在 2000 字上限内）。
 

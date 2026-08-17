@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""拉取 600519 贵州茅台真实日K → 写入 watchlist_kline/kline.db
+"""拉取 600519 贵州茅台真实日K → 写入 watchlist_kline_store.db
 
 数据源: 腾讯行情 fqkline 接口 (前复权日K)
 用法:
@@ -54,7 +54,7 @@ def main():
     db_rows = [(CODE, d, o, c, h, l, v) for d, o, c, h, l, v in rows]
     n = upsert_kline(db_rows)
     upsert_stock_names({CODE: NAME})
-    print(f"[OK] 写入 {n} 行到 kline.db")
+    print(f"[OK] 写入 {n} 行到 watchlist_kline_store.db")
 
     # 验证
     from watchlist_kline_store import get_kline, db_stats
