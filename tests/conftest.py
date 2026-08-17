@@ -8,9 +8,14 @@ import urllib.request
 import pytest
 
 # 测试隔离：存储后端强制 sqlite（不连 NAS PG16）
-os.environ.setdefault("PAPER_TRADING_DB_BACKEND", "sqlite")
+# 2026-08-18: setdefault→直接赋值。Hermes 会话 shell 环境自带
+# PAPER_TRADING_DB_BACKEND=postgres（source 过 .env），setdefault 不覆盖已存在值，
+# 导致测试静默连 PG（_brief 的 SQLite date() 语法在 PG 上崩）。测试必须物理隔离。
+os.environ["PAPER_TRADING_DB_BACKEND"] = "sqlite"
+# K线库隔离 (2026-08-18): 与交易库同纪律——不连 NAS PG16 watchlist_kline_store
+os.environ["KLINE_DB_BACKEND"] = "sqlite"
 # 认知引擎 DB 隔离 (2026-08-17): 强制 sqlite + 临时库, 不碰生产 data/laap.db / PG
-os.environ.setdefault("COGNITIVE_DB_BACKEND", "sqlite")
+os.environ["COGNITIVE_DB_BACKEND"] = "sqlite"
 os.environ.setdefault(
     "COGNITIVE_DB_PATH",
     os.path.join(os.environ.get("TEMP", "/tmp"), "laap_test_cognitive.db"))

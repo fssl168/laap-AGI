@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """真实K线多标的×多时段 RSI 策略 OOS 回测（论文实证）
 
-数据源: data/watchlist_kline_store.db（真实历史K线）
+数据源: data/watchlist_kline/watchlist_kline_store.db（真实历史K线）
   - 42 只自选股 × 64 天 (2026-05-18 ~ 2026-08-14)
   - 上证指数 sh000001 × 801 天 (2023-04-24 ~ 2026-08-14) → 多时段滚动验证
 
@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-KLINE_DB = Path(__file__).resolve().parents[1] / "data" / "watchlist_kline_store.db"
+KLINE_DB = Path(__file__).resolve().parents[1] / "data" / "watchlist_kline" / "watchlist_kline_store.db"
 
 
 def load_kline_db() -> Dict[str, Dict[str, Any]]:

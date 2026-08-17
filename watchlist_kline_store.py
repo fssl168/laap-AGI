@@ -4,7 +4,7 @@
 
 后端:
   - postgres（默认）: NAS fileclaw-postgres-vector PG16 的 laap_kline 库
-  - sqlite（回退）:   WATCHLIST_KLINE_DB_PATH（默认 <项目根>/data/watchlist_kline_store.db，
+  - sqlite（回退）:   WATCHLIST_KLINE_DB_PATH（默认 <项目根>/data/watchlist_kline/watchlist_kline_store.db，
                       PG 不可用时自动降级）
 
 表：
@@ -22,7 +22,7 @@
   KLINE_DB_BACKEND=postgres|sqlite（默认 postgres）
   KLINE_DB_URL=postgresql+asyncpg://fileclaw:fileclaw_secret@192.168.88.251:54322/laap_kline
     （DATABASE_URL 未设置时用此；否则回退 DATABASE_URL 的 host/port/user/pass + laap_kline 库）
-  WATCHLIST_KLINE_DB_PATH=<本地 SQLite 回退库路径>（留空 = <项目根>/data/watchlist_kline_store.db）
+  WATCHLIST_KLINE_DB_PATH=<本地 SQLite 回退库路径>（留空 = <项目根>/data/watchlist_kline/watchlist_kline_store.db）
 """
 import logging
 import os
@@ -37,6 +37,9 @@ _KLINE_CACHE_TTL = int(os.environ.get("KLINE_CACHE_TTL", "60"))
 
 def _default_db_path() -> Path:
     """SQLite 回退库路径：WATCHLIST_KLINE_DB_PATH 优先，否则项目根 data/。
+
+    真库位置（2026-08-18 统一）：data/watchlist_kline/watchlist_kline_store.db
+    （根目录 data/watchlist_kline_store.db 是 0 字节空壳，已废弃）。
 
     跨平台守卫（2026-08-18，同 laap.paper_trading.db）：非 Windows 平台忽略
     Windows 盘符绝对路径（如 D:/...），避免项目根下生成 D: 垃圾目录。
@@ -55,8 +58,16 @@ def _default_db_path() -> Path:
             except Exception:
                 pass  # 守卫加载失败时按字面路径处理
         if env_path:
-            return Path(env_path)
-    return Path(__file__).resolve().parent / "data" / "watchlist_kline_store.db"
+            project_root = Path(__file__).resolve().parent
+            # 前导斜杠（NAS 风格 /data/...）与相对路径（data/...）统一解析到项目根，
+            # 避免 Path('/data/...') 在 Windows 上解析到当前盘符根目录（2026-08-18）
+            if env_path.startswith("/") and not env_path.startswith("//"):
+                env_path = env_path.lstrip("/")
+            p = Path(env_path)
+            if not p.is_absolute() and not env_path[1:2] == ":":
+                return project_root / p
+            return p
+    return Path(__file__).resolve().parent / "data" / "watchlist_kline" / "watchlist_kline_store.db"
 
 
 DB_PATH = _default_db_path()

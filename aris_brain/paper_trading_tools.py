@@ -141,14 +141,60 @@ def _positions(conn) -> str:
         return f"持仓查询失败: {e}"
 
 
-def _backtest(conn, strategy: str) -> str:
-    """运行回测。"""
+def _backtest(conn, strategy: str = "default") -> str:
+    """运行回测（2026-08-18 修复：旧契约 run_backtest(strategy) 已失效）。
+
+    新契约: 从 watchlist_kline_store 真库（PG 优先/SQLite 回退）加载标的 K 线
+    close 序列 → BacktestRunner.run_backtest(price_series, STRATEGY_PARAMS) 全段回放
+    → 返回指标 JSON。strategy 参数兼容：6 位数字视为股票代码，其余默认 600519。
+    """
     try:
-        from laap.paper_trading.backtest_runner import run_backtest
-        result = run_backtest(strategy)
-        return json.dumps(result, ensure_ascii=False, indent=2)
-    except ImportError:
-        return "回测模块未就绪，请检查配置"
+        from laap.paper_trading.backtest_runner import BacktestRunner
+        from laap.paper_trading.strategy import STRATEGY_PARAMS
+        import json as _json
+
+        # 解析标的代码（兼容规则引擎传参）
+        symbol = "600519"
+        if isinstance(strategy, str) and strategy.strip().isdigit() \
+                and len(strategy.strip()) == 6:
+            symbol = strategy.strip()
+
+        # 从 K 线真库加载 close 序列（watchlist_kline_store 模块，PG 优先）
+        closes = []
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(LAAP_ROOT))
+            from watchlist_kline_store import get_kline
+            code = ("sh" if symbol.startswith("6") else "sz") + symbol
+            rows = get_kline(code, days=800)
+            if rows:
+                # rows: [(code, date, open, close, high, low, volume), ...] 或 dict
+                if isinstance(rows[0], (dict, sqlite3.Row)):
+                    closes = [float(r["close"]) for r in rows]
+                else:
+                    closes = [float(r[3]) for r in rows]
+        except Exception as e:
+            logger.warning(f"pt_backtest kline load fallback: {e}")
+
+        # 回退：real_data 真实 K 线 JSON
+        if not closes:
+            import os
+            rj = os.path.join(str(LAAP_ROOT), "real_data", f"kline_{symbol}.json")
+            if os.path.exists(rj):
+                import json as _json2
+                closes = _json2.load(open(rj, encoding="utf-8"))
+        if not closes:
+            return f"回测失败: 未找到 {symbol} 的K线数据（真库与 real_data 均无）"
+
+        runner = BacktestRunner()
+        result = runner.run_backtest(closes, STRATEGY_PARAMS, split=None)
+        out = {k: (round(v, 4) if isinstance(v, float) else v)
+               for k, v in result.items()}
+        out["symbol"] = symbol
+        out["bars"] = len(closes)
+        return _json.dumps(out, ensure_ascii=False, indent=2)
+    except ImportError as e:
+        return f"回测模块未就绪，请检查配置: {e}"
     except Exception as e:
         return f"回测失败: {e}"
 
@@ -313,7 +359,12 @@ def _brief(conn) -> str:
     """每日交易简报: 净值/盈亏/教训/明日关注 (结构化复盘)。"""
     try:
         from datetime import datetime
+        import time as _time
         result = "📊 今日交易简报\n"
+        # 今日零点时间戳（PG/SQLite 通用：不用 date() 函数，参数化比较）
+        lt = _time.localtime()
+        today_start = _time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday,
+                                    0, 0, 0, 0, 0, -1))
         # 1. 净值
         cursor = conn.execute("SELECT ts, total FROM net_values ORDER BY ts DESC LIMIT 2")
         rows = cursor.fetchall()
@@ -325,10 +376,11 @@ def _brief(conn) -> str:
                 result += f"  较上次: {chg:+.2f}%\n"
         else:
             result += "  净值: 暂无记录\n"
-        # 2. 今日盈亏 (按日期统计 trades)
+        # 2. 今日盈亏 (按日期统计 trades, 参数化时间戳)
         cursor = conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM trades "
-            "WHERE date(entry_ts,'unixepoch','localtime') = date('now','localtime')")
+            "WHERE entry_ts >= ? AND entry_ts < ?",
+            (today_start, today_start + 86400))
         cnt, pnl = cursor.fetchone()
         result += f"  今日交易: {cnt}笔 | 盈亏: {pnl:+.2f}\n"
         # 3. 持仓
@@ -344,10 +396,11 @@ def _brief(conn) -> str:
             result += "  教训:\n"
             for lt, ls in lessons:
                 result += f"    - [{lt or 'general'}] {ls[:50]}\n"
-        # 5. 风控事件 (今日)
+        # 5. 风控事件 (今日, 参数化时间戳)
         cursor = conn.execute(
             "SELECT COUNT(*) FROM risk_rejections "
-            "WHERE date(ts,'unixepoch','localtime') = date('now','localtime')")
+            "WHERE ts >= ? AND ts < ?",
+            (today_start, today_start + 86400))
         rej = cursor.fetchone()[0]
         result += f"  风控拦截: {rej}次"
         return result

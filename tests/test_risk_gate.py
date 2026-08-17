@@ -133,13 +133,18 @@ def test_compute_loss_streak(tmp_path):
     c.execute("INSERT INTO trades (id, symbol) VALUES ('t1','600519')")
     c.execute("INSERT INTO trades (id, symbol) VALUES ('t2','600519')")
     c.execute("INSERT INTO trades (id, symbol) VALUES ('t3','600519')")
-    c.execute("INSERT INTO trades (id, symbol) VALUES ('t4','000001')")
+    c.execute("INSERT INTO trades (id, symbol) VALUES ('t4','600519')")
     # 连亏 2 笔后盈利 1 笔 → streak=0；倒序最新在前
     c.execute("INSERT INTO outcomes (trade_id, pnl_pct) VALUES ('t4', 0.02)")   # 最新：盈利
     c.execute("INSERT INTO outcomes (trade_id, pnl_pct) VALUES ('t3', -0.01)")  # 亏
     c.execute("INSERT INTO outcomes (trade_id, pnl_pct) VALUES ('t2', -0.02)")  # 亏
     c.execute("INSERT INTO outcomes (trade_id, pnl_pct) VALUES ('t1', 0.01)")   # 盈（最早）
+    # 其他标的独立验证（symbol 过滤）
+    c.execute("INSERT INTO trades (id, symbol) VALUES ('t5','000001')")
+    c.execute("INSERT INTO outcomes (trade_id, pnl_pct) VALUES ('t5', -0.03)")
     c.commit()
     c.close()
     # 按 rowid 倒序最新在前：t4(盈) → streak=0
     assert compute_loss_streak(db, "600519") == 0
+    # 000001 最新一笔亏损 → streak=1
+    assert compute_loss_streak(db, "000001") == 1

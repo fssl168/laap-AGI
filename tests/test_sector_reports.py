@@ -28,6 +28,14 @@ def tools(monkeypatch, tmp_path):
     monkeypatch.setattr(tools, "_build_sector_llm_call", lambda: None)
     monkeypatch.setattr(tools, "DB_PATH", str(tmp_path / "pt.db"))
     monkeypatch.setattr(tools, "REPORT_DIR", str(tmp_path / "report"))
+    # 2026-08-18 修复: _persist_sector_report 走 _db()(PaperDB→生产PG/SQLite),
+    # 测试直接查 tmp DB_PATH 会 no such table。patch _db 也指向 tmp 库。
+    def _tmp_db():
+        import sqlite3
+        conn = sqlite3.connect(tools.DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
+    monkeypatch.setattr(tools, "_db", _tmp_db)
     return tools
 
 

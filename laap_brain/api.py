@@ -2113,7 +2113,8 @@ async def auth_middleware(request, handler):
     key = os.environ.get("LAAP_API_KEY", "")
     if not key:
         return await handler(request)
-    if request.path in ("/", "/health"):
+    # / 和 /health 免鉴权；WS 端点走自定义鉴权（upgrade 前无法发 header）
+    if request.path in ("/", "/health", "/v1/quant/events/ws"):
         return await handler(request)
     auth = request.headers.get("Authorization", "")
     if auth == f"Bearer {key}":

@@ -3,6 +3,7 @@
 """本地 laap-AGI/data/ 目录 → NAS 同步
 
 内容: laap_trading.db / trading_calendar.json(兼容) / watchlist_kline_store.db
+（K线真库在 data/watchlist_kline/ 子目录，2026-08-18 统一；根目录同名文件是空壳勿同步）
 """
 import hashlib
 import os
@@ -15,7 +16,7 @@ LOCAL_ROOT = r"D:\laap-AGI"
 FILES = [
     "data/laap_trading.db",
     "data/trading_calendar.json",
-    "data/watchlist_kline_store.db",
+    "data/watchlist_kline/watchlist_kline_store.db",
     "data/watchlist_kline/candidates_10d.png",
     "data/watchlist_kline/kline_3y.png",
     "data/watchlist_kline/kline_lastweek.png",
