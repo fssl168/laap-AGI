@@ -11,16 +11,15 @@ from datetime import datetime
 from typing import Dict, Any
 import sqlite3
 
-# LAAP paper_trading路径
-LAAP_ROOT = r"D:\laap-AGI"
+# LAAP paper_trading路径（从文件位置推导，跨平台；避免硬编码 Windows 盘符
+# 路径在非 Windows 环境被当相对路径 → 项目根下生成 D:\laap-AGI 垃圾目录）
+LAAP_ROOT = str(Path(__file__).resolve().parent.parent)
 # 动态解析 laap_trading.db（2026-08-17）：优先 PAPER_TRADING_DB_PATH env，否则项目根 data/。
-# 此前硬编码 `D:\laap-AGI\data\laap_trading.db` 在非 Windows 环境被当相对路径 → 指向错误位置。
+# 2026-08-18：非 Windows 平台忽略 Windows 盘符绝对路径（同 laap.paper_trading.db 守卫）。
 # 测试可通过 monkeypatch DB_PATH 覆盖（如 tmp 路径）。
 def _default_paper_db_path() -> str:
-    env_path = os.environ.get("PAPER_TRADING_DB_PATH", "")
-    if env_path:
-        return env_path
-    return str(Path(__file__).resolve().parent.parent / "data" / "laap_trading.db")
+    from laap.paper_trading.db import _default_db_path
+    return _default_db_path()
 
 
 DB_PATH = _default_paper_db_path()
@@ -43,7 +42,10 @@ def _db() -> sqlite3.Connection:
     """
     from laap.paper_trading.db import PaperDB
     try:
-        db = PaperDB(db_path=DB_PATH)
+        # 生产：不传 db_path → PaperDB 按 PAPER_TRADING_DB_BACKEND 走 PG（laap_trading），
+        # PG 不可用自动回退 SQLite（laap_trading.db）。
+        # 注意：显式传 db_path 会强制 SQLite（测试隔离纪律），生产必须省略。
+        db = PaperDB()
         return db.conn()
     except Exception as e:
         logger.warning(f"paper_trading_tools._db schema init failed, raw connect: {e}")

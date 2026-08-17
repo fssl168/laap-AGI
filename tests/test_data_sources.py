@@ -14,7 +14,8 @@ def test_source_chain_default(monkeypatch):
               "LLM_SOURCES"):
         monkeypatch.delenv(k, raising=False)
     assert source_chain("PROFILE") == ["individual_info", "em_profile", "cninfo"]
-    assert source_chain("MARKET") == ["akshare", "tx", "xq", "stub"]
+    assert source_chain("MARKET") == ["tx", "em", "tickplus", "xq", "akshare",
+                                      "stub"]
     assert source_chain("KLINE") == ["db", "tushare", "tencent", "akshare",
                                      "synthetic"]
     assert source_chain("NEWS") == ["eastmoney", "sina", "cls", "tushare",

@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -103,6 +104,8 @@ def _start_quant_daily_scheduler() -> Optional[Any]:
     """启动每日管线调度器（M3，LAAP_QUANT_DAILY=1 显式开启，默认关闭）。
 
     每日 tick：参数搜索 → 代码落回（M4 治理 + 交易自我审核）→ 日终执行。
+    2026-08-17: LAAP_EVENT_DRIVEN=1 时创建但不启动线程 —— 日级闭环改由
+    事件驱动编排器（收盘后 daily_cycle 事件）驱动，避免双驱动重复跑日线。
     """
     global _quant_daily_scheduler
     if _quant_daily_scheduler is not None:
@@ -120,6 +123,10 @@ def _start_quant_daily_scheduler() -> Optional[Any]:
         _quant_daily_scheduler = QuantDailyScheduler(
             pipe, interval_seconds=int(
                 os.environ.get("LAAP_QUANT_DAILY_INTERVAL", "86400")))
+        if os.environ.get("LAAP_EVENT_DRIVEN", "") == "1":
+            logger.info("QuantDailyScheduler created but NOT started: "
+                        "event-driven layer owns daily_cycle (LAAP_EVENT_DRIVEN=1)")
+            return _quant_daily_scheduler
         _quant_daily_scheduler.start()
         logger.info("QuantDailyScheduler started (LAAP_QUANT_DAILY=1)")
     except Exception as e:
@@ -177,13 +184,111 @@ def _start_news_worker() -> Optional[Any]:
 
 # 事件驱动编排器 (LAAP_EVENT_DRIVEN=1 启用, 2026-08-17)
 _event_orchestrator: Optional[Any] = None
+# 事件层盘中止损兜底状态（无 NewsSignalWorker 时的移动止损高水位）
+_ev_monitor_state: Dict[str, Any] = {}
+# EventBus → WebSocket 桥接 (2026-08-18): ws:// 长连接实时推送
+_ws_bridge: Optional[Any] = None
+# 外部事件回调记录（有界，供 /v1/quant/events/status 快速查看最近事件）
+_recent_events: "deque[Dict[str, Any]]" = deque(maxlen=200)
+
+
+def _get_ws_bridge() -> Optional[Any]:
+    """懒创建 EventWsBridge（首个 WS 连接时绑定 running loop）。"""
+    global _ws_bridge
+    if _ws_bridge is None:
+        try:
+            from laap.paper_trading.ws_bridge import EventWsBridge
+            _ws_bridge = EventWsBridge()
+        except Exception as e:
+            logger.warning(f"EventWsBridge init failed: {e}")
+            _ws_bridge = None
+    return _ws_bridge
+
+
+def _on_external_event(ev: Any, kind: str, log: bool = False) -> None:
+    """事件驱动外部事件回调公共入口（补齐 on_* 回调缺口）。
+
+    记录到 _recent_events（HTTP 状态接口可见）；可选 INFO 日志。
+    该钩子也是 RSI 自进化生命体的实时事件观察点——后续进化层
+    可在此订阅 tick/limit_up/fault/trade 事件驱动反思/调参。
+    """
+    _recent_events.append({
+        "type": ev.type,
+        "ts": getattr(ev, "ts", time.time()),
+        "kind": kind,
+        "source": getattr(ev, "source", ""),
+        "payload": {k: v for k, v in getattr(ev, "payload", {}).items()
+                    if k != "ts"},
+    })
+    if log:
+        logger.info("Event %s: %s", kind, getattr(ev, "type", ""))
+
+
+def _on_tick_event(ev: Any) -> None:
+    """on_tick 业务回调：记录（不打 INFO，避免 5s×N 标的刷屏）。"""
+    _on_external_event(ev, "tick")
+
+
+def _on_limit_up_event(ev: Any) -> None:
+    _on_external_event(ev, "limit_up", log=True)
+
+
+def _on_fault_event(ev: Any) -> None:
+    _on_external_event(ev, "fault", log=True)
+
+
+def _on_trade_event(ev: Any) -> None:
+    _on_external_event(ev, "trade", log=True)
+
+
+def _on_orderbook_event(ev: Any) -> None:
+    _on_external_event(ev, "orderbook")
+
+
+def _run_daily_cycle() -> Optional[Any]:
+    """日级 daily_cycle 业务回调（事件层触发）：
+      优先复用 QuantDailyScheduler 持有的管线；缺失时一次性跑 pipeline.run()。
+    """
+    try:
+        if _quant_daily_scheduler is not None:
+            return _quant_daily_scheduler.tick()
+        qe = _get_quant_engine()
+        loop = _get_paper_loop()
+        if qe is None or loop is None:
+            logger.warning("daily_cycle: quant engine/loop unavailable")
+            return None
+        from laap.paper_trading.daily_pipeline import QuantDailyPipeline
+        return QuantDailyPipeline(qe, loop).run()
+    except Exception as e:
+        logger.error(f"daily_cycle callback failed: {e}")
+        return None
+
+
+def _run_position_monitor() -> Optional[Any]:
+    """盘中止损业务回调（事件层触发）：
+      优先复用 NewsSignalWorker（共享其持仓监控状态，避免双状态）；
+      缺失时用 PaperClosedLoop + 事件层自己的状态跑 monitor_positions。
+    """
+    try:
+        if _news_worker is not None:
+            return _news_worker._monitor_open_positions()
+        loop = _get_paper_loop()
+        if loop is None:
+            return None
+        from laap.paper_trading.daily_pipeline import monitor_positions
+        return monitor_positions(loop, _ev_monitor_state)
+    except Exception as e:
+        logger.error(f"position_monitor callback failed: {e}")
+        return None
 
 
 def _start_event_orchestrator() -> Optional[Any]:
     """启动事件驱动编排器 (LAAP_EVENT_DRIVEN=1 显式开启, 默认关闭)。
 
     行情事件源 (轮询四源 → tick 事件 + 缓存 + 故障检测) + 场景订阅器
-    (tick 盯盘/涨停捕捉/集合竞价/故障报告/状态/内部消息/交易通知)。
+    (tick 盯盘/涨停捕捉/集合竞价/五档盘口/故障报告/日级/盘中止损/状态/内部消息/交易通知)
+    + 调度线程（盘中盘中止损节流 / 收盘后日级闭环 / 周期状态报告）。
+    2026-08-17: 业务回调全部接线（此前零回调 → daily_cycle/position_monitor 死循环）。
     """
     global _event_orchestrator
     if _event_orchestrator is not None:
@@ -195,10 +300,23 @@ def _start_event_orchestrator() -> Optional[Any]:
         symbols = _news_symbols()
         interval = float(os.environ.get("MARKET_EVENT_INTERVAL", "5"))
         _event_orchestrator = EventOrchestrator(
-            symbols=symbols, interval=interval)
+            symbols=symbols, interval=interval,
+            on_daily_cycle=_run_daily_cycle,
+            on_position_monitor=_run_position_monitor,
+            # 2026-08-18 补齐 on_* 外部回调缺口: tick/涨停/故障/交易/盘口
+            # → 记录 + WS 推送（桥接直接订阅 EventBus, 此处为业务钩子）
+            on_tick=_on_tick_event,
+            on_limit_up=_on_limit_up_event,
+            on_fault=_on_fault_event,
+            on_trade=_on_trade_event,
+            on_orderbook=_on_orderbook_event,
+        )
         _event_orchestrator.start()
         logger.info(f"EventOrchestrator started (LAAP_EVENT_DRIVEN=1, "
-                    f"symbols={len(symbols)}, interval={interval}s)")
+                    f"symbols={len(symbols)}, interval={interval}s, "
+                    f"position_interval={_event_orchestrator.position_interval}s, "
+                    f"daily_cycle={_event_orchestrator.daily_cycle_hm // 60:02d}:"
+                    f"{_event_orchestrator.daily_cycle_hm % 60:02d})")
     except Exception as e:
         logger.warning(f"EventOrchestrator failed to start: {e}")
         _event_orchestrator = None
@@ -1430,10 +1548,72 @@ async def handle_quant_events_status(request):
         if orch is None:
             return web.json_response({"running": False,
                                       "hint": "set LAAP_EVENT_DRIVEN=1 to enable"})
-        return web.json_response(orch.status())
+        status = orch.status()
+        status["recent_events"] = list(_recent_events)[-50:]
+        status["ws_bridge"] = (_get_ws_bridge().stats()
+                               if _get_ws_bridge() is not None else None)
+        return web.json_response(status)
     except Exception as e:
         logger.warning(f"quant_events_status failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_events_ws(request):
+    """GET /v1/quant/events/ws — WebSocket 实时事件推送 (EventBus → ws:// 桥接, 2026-08-18)。
+
+    事件源由 LAAP_EVENT_DRIVEN=1 驱动；未启用时连接可建但无事件（fail-closed）。
+
+    上行（JSON）:
+      {"op": "subscribe", "topics": ["market.limitup.*", "system.status", ...]}
+      {"op": "unsubscribe", "topics": [...]}
+      {"op": "ping"}
+    下行: Event.to_dict() = {"type", "ts", "payload", "source"}
+    """
+    ws = web.WebSocketResponse(heartbeat=30)
+    await ws.prepare(request)
+    bridge = _get_ws_bridge()
+    if bridge is None:
+        await ws.send_json({"type": "system.status",
+                            "payload": {"running": False,
+                                        "hint": "EventWsBridge unavailable"}})
+        await ws.close()
+        return ws
+    try:
+        cid = bridge.register(ws)
+    except Exception as e:
+        logger.warning(f"quant_events_ws register failed: {e}")
+        await ws.close()
+        return ws
+    try:
+        async for msg in ws:
+            if msg.type == web.WSMsgType.TEXT:
+                try:
+                    data = json.loads(msg.data)
+                except Exception:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                op = data.get("op")
+                topics = data.get("topics")
+                if op == "subscribe":
+                    bridge.set_topics(cid, topics)
+                    await ws.send_json({"type": "system.internal.subscribed",
+                                        "payload": {"topics": topics or ["*"]}})
+                elif op == "unsubscribe" and isinstance(topics, list):
+                    bridge.remove_topics(cid, topics)
+                elif op == "ping":
+                    await ws.send_json({"type": "pong", "ts": time.time()})
+            elif msg.type == web.WSMsgType.ERROR:
+                break
+    except (asyncio.CancelledError, ConnectionResetError, RuntimeError):
+        pass
+    finally:
+        bridge.unregister(cid)
+        try:
+            await ws.close()
+        except Exception:
+            pass
+    return ws
 
 
 async def handle_quant_daily_cycle(request):
@@ -1652,7 +1832,7 @@ async def handle_quant_orders(request):
         conn = db.conn()
         try:
             rows = conn.execute(
-                "SELECT * FROM orders ORDER BY rowid DESC LIMIT 100").fetchall()
+                "SELECT * FROM orders ORDER BY id DESC LIMIT 100").fetchall()
         finally:
             conn.close()
         return web.json_response([dict(r) for r in rows])
@@ -1670,7 +1850,7 @@ async def handle_quant_outcomes(request):
         conn = db.conn()
         try:
             rows = conn.execute(
-                "SELECT * FROM outcomes ORDER BY rowid DESC LIMIT 100").fetchall()
+                "SELECT * FROM outcomes ORDER BY trade_id DESC LIMIT 100").fetchall()
         finally:
             conn.close()
         return web.json_response([dict(r) for r in rows])
@@ -1970,6 +2150,7 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/quant/self/status", handle_quant_self_status)
     app.router.add_get("/v1/quant/strategies", handle_quant_strategies)
     app.router.add_get("/v1/quant/events/status", handle_quant_events_status)
+    app.router.add_get("/v1/quant/events/ws", handle_quant_events_ws)
     app.router.add_post("/v1/quant/daily_cycle", handle_quant_daily_cycle)
     app.router.add_post("/v1/quant/apply_params", handle_quant_apply_params)
     app.router.add_post("/v1/quant/evolve", handle_quant_evolve)

@@ -14,6 +14,11 @@ os.environ.setdefault("COGNITIVE_DB_BACKEND", "sqlite")
 os.environ.setdefault(
     "COGNITIVE_DB_PATH",
     os.path.join(os.environ.get("TEMP", "/tmp"), "laap_test_cognitive.db"))
+# API 鉴权隔离 (2026-08-18): 置空 LAAP_API_KEY。api 模块 import 时会 load_dotenv
+# 从 .env 注入真实 key，导致假设"默认开放 API"的端点测试（test_laap_api/test_laap_tools）
+# 被 auth_middleware 拒 401。load_dotenv(override=False) 不会覆盖已存在的空值；
+# 鉴权行为由 test_mcp_tools 用 monkeypatch.setenv/delenv 单测覆盖。
+os.environ["LAAP_API_KEY"] = ""
 
 LAAP_API_BASE = "http://localhost:11546"
 

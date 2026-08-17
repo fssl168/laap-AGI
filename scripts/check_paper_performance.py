@@ -17,6 +17,7 @@ import argparse
 import datetime
 import json
 import math
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -31,18 +32,25 @@ MIN_OBS_LOG = 20         # TradingSelf 观察日志 ≥20 条
 
 
 def _default_db_path() -> Path:
-    # 1) 优先 .env 指定路径（Windows 用户机 D:/laap-AGI/...），存在才用
+    """数据库路径：优先 PAPER_TRADING_DB_PATH env，否则项目根 data/laap_trading.db。
+
+    2026-08-17: SQLite 回退库从 paper_trading.db 改为 laap_trading.db（含历史数据）。
+    2026-08-18: 非 Windows 平台忽略 .env 里的 Windows 盘符绝对路径（防 D: 垃圾目录）。
+    """
+    from laap.paper_trading.db import _is_windows_drive_abs
     env = ROOT / ".env"
     if env.exists():
         for line in env.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line.startswith("PAPER_TRADING_DB_PATH="):
                 p = Path(line.split("=", 1)[1].strip())
+                if os.name != "nt" and _is_windows_drive_abs(str(p)):
+                    break  # Windows 盘符路径在非 Windows 无效 → 回退项目根相对路径
                 if p.exists():
                     return p
                 break  # env 路径不存在 → 回退项目根相对路径
     # 2) 项目根相对默认
-    return ROOT / "data" / "paper_trading.db"
+    return ROOT / "data" / "laap_trading.db"
 
 
 def _local_ts(ts: float) -> str:
@@ -83,22 +91,27 @@ def _max_drawdown(totals: list) -> float:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="paper 观察期进度查看器")
-    ap.add_argument("--db", default=str(_default_db_path()))
+    ap.add_argument("--db", default="", help="显式指定 SQLite 库路径（默认走 PG laap_trading）")
     ap.add_argument("--top", type=int, default=15, help="成交明细最多显示笔数")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
     ap.add_argument("--days", type=int, default=0,
                     help="只看最近 N 个净值快照（0=全部）")
     args = ap.parse_args()
 
-    dbp = Path(args.db)
-    if not dbp.exists():
-        msg = (f"库不存在: {dbp}\n调度器还没写入数据？周一开跑后这里才会积累。"
-               f"\n确认服务已启动且 LAAP_QUANT_DAILY=1。")
-        print(msg)
-        return 1
-
-    conn = sqlite3.connect(str(dbp))
-    conn.row_factory = sqlite3.Row
+    # 连接：显式 --db → SQLite 直连；否则 PaperDB（PG laap_trading 优先，SQLite 回退）
+    if args.db:
+        dbp = Path(args.db)
+        if not dbp.exists():
+            msg = (f"库不存在: {dbp}\n调度器还没写入数据？周一开跑后这里才会积累。"
+                   f"\n确认服务已启动且 LAAP_QUANT_DAILY=1。")
+            print(msg)
+            return 1
+        conn = sqlite3.connect(str(dbp))
+        conn.row_factory = sqlite3.Row
+    else:
+        from laap.paper_trading.db import PaperDB
+        db = PaperDB()
+        conn = db.conn()
     cur = conn.cursor()
 
     # ── 净值序列 ──
