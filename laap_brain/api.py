@@ -41,6 +41,9 @@ except Exception:
 
 logger = logging.getLogger("laap.api")
 
+# 量化只读端点缓存 TTL (秒) (2026-08-17): net_values/signals 等高频查询
+_QUANT_READ_TTL = int(os.environ.get("QUANT_READ_CACHE_TTL", "10"))
+
 # ── 全局状态 ─────────────────────────────────────────────────
 
 _integrator: Optional[HermesIntegrator] = None
@@ -1499,12 +1502,20 @@ async def handle_quant_evolve_audit(request):
 
 
 async def handle_quant_trades(request):
-    """GET /v1/quant/trades — 查询交易记录。"""
+    """GET /v1/quant/trades — 查询交易记录。
+
+    2026-08-17: 两级缓存 (redis → 内存, TTL 10s)。
+    """
     try:
+        from laap.paper_trading.cache_backend import cache_get, cache_set
+        symbol = request.query.get("symbol", "")
+        ck = f"quant:trades:{symbol or 'all'}"
+        cached = cache_get(ck)
+        if cached is not None:
+            return web.json_response(cached)
         db = _get_quant_db()
         if db is None:
             return web.json_response({"error": "internal error"}, status=500)
-        symbol = request.query.get("symbol", "")
         conn = db.conn()
         try:
             if symbol:
@@ -1518,15 +1529,25 @@ async def handle_quant_trades(request):
                 ).fetchall()
         finally:
             conn.close()
-        return web.json_response([dict(r) for r in rows])
+        result = [dict(r) for r in rows]
+        cache_set(ck, result, ttl=_QUANT_READ_TTL)
+        return web.json_response(result)
     except Exception as e:
         logger.warning(f"quant_trades failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)
 
 
 async def handle_quant_net_values(request):
-    """GET /v1/quant/net_values — 查询净值序列 (ts/cash/equity/total，升序)。"""
+    """GET /v1/quant/net_values — 查询净值序列 (ts/cash/equity/total，升序)。
+
+    2026-08-17: 两级缓存 (redis → 内存, TTL 10s) —— 高频查询加速。
+    """
     try:
+        from laap.paper_trading.cache_backend import cache_get, cache_set
+        ck = "quant:net_values"
+        cached = cache_get(ck)
+        if cached is not None:
+            return web.json_response(cached)
         db = _get_quant_db()
         if db is None:
             return web.json_response({"error": "internal error"}, status=500)
@@ -1537,19 +1558,29 @@ async def handle_quant_net_values(request):
             ).fetchall()
         finally:
             conn.close()
-        return web.json_response([dict(r) for r in rows])
+        result = [dict(r) for r in rows]
+        cache_set(ck, result, ttl=_QUANT_READ_TTL)
+        return web.json_response(result)
     except Exception as e:
         logger.warning(f"quant_net_values failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)
 
 
 async def handle_quant_signals(request):
-    """GET /v1/quant/signals — 查询交易信号（可带 ?symbol= 过滤）。"""
+    """GET /v1/quant/signals — 查询交易信号（可带 ?symbol= 过滤）。
+
+    2026-08-17: 两级缓存 (redis → 内存, TTL 10s)。
+    """
     try:
+        from laap.paper_trading.cache_backend import cache_get, cache_set
+        symbol = request.query.get("symbol", "")
+        ck = f"quant:signals:{symbol or 'all'}"
+        cached = cache_get(ck)
+        if cached is not None:
+            return web.json_response(cached)
         db = _get_quant_db()
         if db is None:
             return web.json_response({"error": "internal error"}, status=500)
-        symbol = request.query.get("symbol", "")
         conn = db.conn()
         try:
             if symbol:
@@ -1561,7 +1592,9 @@ async def handle_quant_signals(request):
                     "SELECT * FROM signals ORDER BY ts DESC LIMIT 100").fetchall()
         finally:
             conn.close()
-        return web.json_response([dict(r) for r in rows])
+        result = [dict(r) for r in rows]
+        cache_set(ck, result, ttl=_QUANT_READ_TTL)
+        return web.json_response(result)
     except Exception as e:
         logger.warning(f"quant_signals failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)
@@ -1604,12 +1637,20 @@ async def handle_quant_outcomes(request):
 
 
 async def handle_quant_decisions(request):
-    """GET /v1/quant/decisions — 查询决策留痕（POST 用于写入）。"""
+    """GET /v1/quant/decisions — 查询决策留痕（POST 用于写入）。
+
+    2026-08-17: 两级缓存 (redis → 内存, TTL 10s)。
+    """
     try:
+        from laap.paper_trading.cache_backend import cache_get, cache_set
+        symbol = request.query.get("symbol", "")
+        ck = f"quant:decisions:{symbol or 'all'}"
+        cached = cache_get(ck)
+        if cached is not None:
+            return web.json_response(cached)
         db = _get_quant_db()
         if db is None:
             return web.json_response({"error": "internal error"}, status=500)
-        symbol = request.query.get("symbol", "")
         conn = db.conn()
         try:
             if symbol:
@@ -1621,7 +1662,9 @@ async def handle_quant_decisions(request):
                     "SELECT * FROM decisions ORDER BY ts DESC LIMIT 100").fetchall()
         finally:
             conn.close()
-        return web.json_response([dict(r) for r in rows])
+        result = [dict(r) for r in rows]
+        cache_set(ck, result, ttl=_QUANT_READ_TTL)
+        return web.json_response(result)
     except Exception as e:
         logger.warning(f"quant_decisions failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)

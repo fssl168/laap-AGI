@@ -29,6 +29,9 @@ from pathlib import Path
 
 logger = logging.getLogger("watchlist_kline_store")
 
+# K线/名称/日历读取缓存 TTL (秒) (2026-08-17): 高频读取走两级缓存
+_KLINE_CACHE_TTL = int(os.environ.get("KLINE_CACHE_TTL", "60"))
+
 DB_PATH = Path(__file__).resolve().parent / "data" / "watchlist_kline_store.db"
 
 # 后端选择：KLINE_DB_BACKEND 或继承 DATABASE_URL 存在性
@@ -142,13 +145,30 @@ def upsert_kline(rows) -> int:
             rows,
         )
         conn.commit()
+        # 写后失效缓存 (2026-08-17)
+        try:
+            from laap.paper_trading.cache_backend import cache_clear_prefix
+            codes = {r[0] for r in rows}
+            for code in codes:
+                cache_clear_prefix(f"kline:{code}:")
+        except Exception:
+            pass
         return len(rows)
     finally:
         conn.close()
 
 
 def get_kline(code: str, days: int = 30) -> list:
-    """取个股/指数最近 N 天日 K（按日期升序）。"""
+    """取个股/指数最近 N 天日 K（按日期升序）。
+
+    2026-08-17: 两级缓存 (redis → 内存 TTL, 默认 60s) —— K线是最高频读取
+    (每日 tick 34 只 × 多次), 缓存避免重复查库。
+    """
+    from laap.paper_trading.cache_backend import cache_get, cache_set
+    ck = f"kline:{code}:{days}"
+    cached = cache_get(ck)
+    if cached is not None:
+        return cached
     init_db()
     conn = _connect()
     try:
@@ -158,7 +178,9 @@ def get_kline(code: str, days: int = 30) -> list:
             (code, days),
         )
         rows = cur.fetchall()
-        return list(reversed(rows))  # 升序
+        result = list(reversed(rows))  # 升序
+        cache_set(ck, result, ttl=_KLINE_CACHE_TTL)
+        return result
     finally:
         conn.close()
 
@@ -272,7 +294,15 @@ def upsert_stock_names(names: dict) -> int:
 
 
 def get_stock_names(codes: list = None) -> dict:
-    """读取 代码→名称 映射；codes 为 None 时返回全部。"""
+    """读取 代码→名称 映射；codes 为 None 时返回全部。
+
+    2026-08-17: 两级缓存 (redis → 内存 TTL)。
+    """
+    from laap.paper_trading.cache_backend import cache_get, cache_set
+    ck = "kline:names:all" if not codes else "kline:names:" + ",".join(codes)
+    cached = cache_get(ck)
+    if cached is not None:
+        return cached
     init_db()
     conn = _connect()
     try:
@@ -281,7 +311,9 @@ def get_stock_names(codes: list = None) -> dict:
             cur = conn.execute(f"SELECT code, name FROM stock_names WHERE code IN ({ph})", codes)
         else:
             cur = conn.execute("SELECT code, name FROM stock_names")
-        return {c: n for c, n in cur.fetchall()}
+        result = {c: n for c, n in cur.fetchall()}
+        cache_set(ck, result, ttl=_KLINE_CACHE_TTL)
+        return result
     finally:
         conn.close()
 
@@ -307,13 +339,30 @@ def save_trading_calendar(dates: set, synced_at: str = "") -> None:
             ("synced_at", synced_at or ""),
         )
         conn.commit()
+        # 写后失效缓存 (2026-08-17)
+        try:
+            from laap.paper_trading.cache_backend import cache_clear_prefix
+            cache_clear_prefix("kline:trading_calendar")
+        except Exception:
+            pass
     finally:
         conn.close()
 
 
 def load_trading_calendar() -> tuple:
-    """读取交易日历缓存。返回 (dates_set, synced_at)；无数据返回 (None, '')。"""
+    """读取交易日历缓存。返回 (dates_set, synced_at)；无数据返回 (None, '')。
+
+    2026-08-17: 两级缓存 (redis → 内存 TTL) 加速高频读取。
+    """
     import json
+    from laap.paper_trading.cache_backend import cache_get, cache_set
+    ck = "kline:trading_calendar"
+    cached = cache_get(ck)
+    if cached is not None:
+        try:
+            return set(cached.get("dates", [])), cached.get("synced_at", "")
+        except Exception:
+            pass
     init_db()
     conn = _connect()
     try:
@@ -326,4 +375,6 @@ def load_trading_calendar() -> tuple:
         dates = set(json.loads(rows["dates"]))
     except Exception:
         return None, ""
+    cache_set(ck, {"dates": sorted(dates), "synced_at": rows.get("synced_at", "")},
+              ttl=_KLINE_CACHE_TTL)
     return dates, rows.get("synced_at", "")

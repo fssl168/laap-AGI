@@ -37,6 +37,9 @@ _PG_PASSWORD = os.environ.get("PAPER_TRADING_PG_PASSWORD", "fileclaw_secret")
 # 后端选择: COGNITIVE_DB_BACKEND=postgres|sqlite (默认 postgres, 同 paper_trading)
 _BACKEND = os.environ.get("COGNITIVE_DB_BACKEND", "postgres").lower()
 
+# 读取缓存 TTL (秒) (2026-08-17): 认知引擎读取走两级缓存 redis→内存
+_READ_TTL = int(os.environ.get("COGNITIVE_CACHE_TTL", "30"))
+
 # identity 列的表(PG 插入需 OVERRIDING SYSTEM VALUE)
 _IDENTITY_TABLES = {"evolution_audit", "knowledge_transfers"}
 
@@ -165,12 +168,22 @@ def upsert(table: str, row: Dict[str, Any]) -> None:
             sql = _adapt_sql(sql)
         conn.execute(sql, params)
         conn.commit()
+        invalidate(table)  # 写后失效缓存 (2026-08-17)
     finally:
         conn.close()
 
 
 def fetch_all(table: str, limit: int = 1000) -> List[Dict[str, Any]]:
-    """读全部行(倒序, 限 limit)。"""
+    """读全部行(倒序, 限 limit)。
+
+    2026-08-17: 两级缓存 (redis → 内存 TTL) —— 高速读取命中缓存不查 DB。
+    TTL: 默认 30s (认知引擎写入频率中等, 短暂延迟可接受)。
+    """
+    from laap.paper_trading.cache_backend import cache_get, cache_set
+    ck = f"cognitive:{table}:all:{limit}"
+    cached = cache_get(ck)
+    if cached is not None:
+        return cached
     conn = _connect()
     try:
         pk = _PK.get(table)
@@ -182,23 +195,44 @@ def fetch_all(table: str, limit: int = 1000) -> List[Dict[str, Any]]:
             order = "rowid"
         sql = f"SELECT * FROM {table} ORDER BY {order} DESC LIMIT {int(limit)}"
         rows = conn.execute(sql).fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        cache_set(ck, result, ttl=_READ_TTL)
+        return result
     finally:
         conn.close()
 
 
 def fetch_where(table: str, where: str, params: List[Any],
                 limit: int = 1000) -> List[Dict[str, Any]]:
-    """按条件查询。"""
+    """按条件查询。
+
+    2026-08-17: 两级缓存 (redis → 内存 TTL)。
+    """
+    from laap.paper_trading.cache_backend import cache_get, cache_set
+    ck = f"cognitive:{table}:w:{where}:{','.join(str(p) for p in params)}:{limit}"
+    cached = cache_get(ck)
+    if cached is not None:
+        return cached
     conn = _connect()
     try:
         sql = f"SELECT * FROM {table} WHERE {where} LIMIT {int(limit)}"
         if _is_pg(conn):
             sql = _adapt_sql(sql)
         rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        cache_set(ck, result, ttl=_READ_TTL)
+        return result
     finally:
         conn.close()
+
+
+def invalidate(table: str) -> None:
+    """写入后失效该表的缓存 (2026-08-17)。"""
+    from laap.paper_trading.cache_backend import cache_clear_prefix
+    try:
+        cache_clear_prefix(f"cognitive:{table}:")
+    except Exception:
+        pass
 
 
 def truncate(table: str) -> None:
@@ -210,6 +244,7 @@ def truncate(table: str) -> None:
         else:
             conn.execute(f"DELETE FROM {table}")
         conn.commit()
+        invalidate(table)  # 写后失效缓存 (2026-08-17)
     finally:
         conn.close()
 
