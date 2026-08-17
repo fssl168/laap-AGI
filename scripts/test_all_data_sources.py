@@ -2,7 +2,7 @@
 """LAAP 全量数据源测试（7 域 × 各源候选）
 
 逐域验证:
-  MARKET   行情取价    akshare → tx → xq → stub
+  MARKET   行情取价    tx → xq → stub (2026-08-17: akshare 被东财 WAF 拒, 移除)
   KLINE    K线        db → tushare → akshare → synthetic
   NEWS     新闻        eastmoney → sina → cls → tushare → bocha → tavily → minimax
   PROFILE  公司画像    individual_info → em_profile → cninfo
@@ -25,18 +25,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def test_market(symbol: str = "600519") -> dict:
-    """行情取价：逐个源尝试，报告各自结果。"""
+    """行情取价：按配置链 (MARKET_SOURCES) 逐个源尝试，报告各自结果。
+
+    2026-08-17 修复: 原硬编码 LiveMarketSource(akshare) —— 与真实服务
+    走 resolve_source 配置链不一致; akshare 被东财 WAF 拒后显示 stub 假象。
+    现按 source_chain('MARKET') 逐源测试 + resolve_source 主链路验证。
+    """
+    from laap.paper_trading.data_sources import source_chain
     from laap.paper_trading.market_source import (
-        LiveMarketSource, resolve_source)
+        LiveMarketSource, TxMarketSource, XqMarketSource, resolve_source)
     out = {}
-    try:
-        live = LiveMarketSource()
-        price, meta = live.get_price(symbol)
-        out["主路径"] = {"ok": True, "price": price, "meta": meta}
-    except Exception as e:
-        out["主路径"] = {"ok": False, "error": str(e)}
+    chain = source_chain("MARKET")
+    out["源链配置"] = chain
+    handlers = {
+        "akshare": lambda: LiveMarketSource().get_price(symbol),
+        "tx": lambda: TxMarketSource().get_price(symbol),
+        "xq": lambda: XqMarketSource().get_price(symbol),
+    }
+    for s in chain:
+        fn = handlers.get(s)
+        if fn is None:
+            out[f"[{s}]"] = {"ok": False, "error": "未实现"}
+            continue
+        try:
+            price, meta = fn()
+            out[f"[{s}]"] = {"ok": True, "price": price, "meta": meta}
+        except Exception as e:
+            out[f"[{s}]"] = {"ok": False, "error": str(e)[:80]}
+    # 主链路: resolve_source(配置链 Composite)
     src = resolve_source(prefer_live=True)
     out["resolve_source"] = type(src).__name__
+    try:
+        price, meta = src.get_price(symbol)
+        out["主链路"] = {"ok": True, "price": price,
+                         "meta": {"source": meta.get("source"),
+                                  "used_fallback": meta.get("used_fallback")}}
+    except Exception as e:
+        out["主链路"] = {"ok": False, "error": str(e)[:80]}
     return out
 
 
