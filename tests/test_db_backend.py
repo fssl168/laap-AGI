@@ -60,10 +60,10 @@ def test_extract_insert_cols():
 
 def test_parse_database_url_asyncpg():
     d = _parse_database_url(
-        "postgresql+asyncpg://fileclaw:fileclaw_secret@192.168.88.251:54322/laap-trading")
+        "postgresql+asyncpg://fileclaw:fileclaw_secret@192.168.88.251:54322/laap_trading")
     assert d == {"host": "192.168.88.251", "port": 54322,
                  "user": "fileclaw", "password": "fileclaw_secret",
-                 "db": "laap-trading"}
+                 "db": "laap_trading"}
 
 
 def test_parse_database_url_plain():

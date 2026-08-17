@@ -3,8 +3,8 @@
 """SQLite → PG16 数据迁移（一次性）
 
 迁移:
-  - data/paper_trading.db (13 表) → NAS PG16 laap-trading 库
-  - data/watchlist_kline/kline.db (2 表) → NAS PG16 laap-kline 库
+  - data/paper_trading.db (13 表) → NAS PG16 laap_trading 库
+  - data/watchlist_kline/kline.db (2 表) → NAS PG16 laap_kline 库
 
 安全: 幂等（PG 已存在数据则跳过该表）；SQLite 源文件保留。
 用法:
@@ -26,8 +26,8 @@ PG_PORT = 54322
 PG_USER = "fileclaw"
 PG_PASSWORD = "fileclaw_secret"
 
-PAPER_DB = "laap-trading"
-KLINE_DB = "laap-kline"
+PAPER_DB = "laap_trading"
+KLINE_DB = "laap_kline"
 
 # paper_trading 缺失的 2 表（PG schema 需补齐）
 _EXTRA_PAPER_TABLES = """
@@ -116,7 +116,7 @@ def _migrate_table(src: sqlite3.Connection, pg: psycopg.Connection,
 
 
 def migrate_paper(pg_conn) -> None:
-    """paper_trading.db → laap-trading。"""
+    """paper_trading.db → laap_trading。"""
     src_path = ROOT / "data" / "paper_trading.db"
     if not src_path.exists():
         print(f"[paper_trading] 源不存在: {src_path}")
@@ -134,7 +134,7 @@ def migrate_paper(pg_conn) -> None:
 
 
 def migrate_kline(pg_conn) -> None:
-    """kline.db → laap-kline。"""
+    """kline.db → laap_kline。"""
     src_path = ROOT / "data" / "watchlist_kline" / "kline.db"
     if not src_path.exists():
         print(f"[kline] 源不存在: {src_path}")

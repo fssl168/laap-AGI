@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-# 测试隔离：强制 SQLite（不连 NAS PG16 laap-kline）
+# 测试隔离：强制 SQLite（不连 NAS PG16 laap_kline）
 os.environ["KLINE_DB_BACKEND"] = "sqlite"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

@@ -55,6 +55,11 @@ FILES = _collect_paper_trading() + [
     "scripts/verify_system_components_real.py",
     "scripts/rsi_oos_backtest.py",
     "scripts/test_all_data_sources.py",
+    "scripts/migrate_sqlite_to_pg.py",
+    # K线存储层（根目录模块）
+    "watchlist_kline_store.py",
+    # 测试
+    "tests/test_kline_store.py",
     # 环境示例
     ".env.example",
     # 注意: aris_brain/aris_cognitive_bridge.py 按用户要求不同步

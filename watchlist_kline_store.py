@@ -3,7 +3,7 @@
 自选股/指数 K 线持久化存储层（PG16 优先，SQLite 回退）。
 
 后端:
-  - postgres（默认）: NAS fileclaw-postgres-vector PG16 的 laap-kline 库
+  - postgres（默认）: NAS fileclaw-postgres-vector PG16 的 laap_kline 库
   - sqlite（回退）:   data/watchlist_kline/kline.db（PG 不可用时自动降级）
 
 表：
@@ -19,8 +19,8 @@
 
 后端配置（环境变量）:
   KLINE_DB_BACKEND=postgres|sqlite（默认 postgres）
-  KLINE_DB_URL=postgresql+asyncpg://fileclaw:fileclaw_secret@192.168.88.251:54322/laap-kline
-    （DATABASE_URL 未设置时用此；否则回退 DATABASE_URL 的 host/port/user/pass + laap-kline 库）
+  KLINE_DB_URL=postgresql+asyncpg://fileclaw:fileclaw_secret@192.168.88.251:54322/laap_kline
+    （DATABASE_URL 未设置时用此；否则回退 DATABASE_URL 的 host/port/user/pass + laap_kline 库）
 """
 import logging
 import os
@@ -64,13 +64,13 @@ _pg_available: bool | None = None
 
 
 def _get_pg_conn():
-    """惰性获取 PG 连接（laap-kline 库）；失败返回 None（回退 SQLite）。"""
+    """惰性获取 PG 连接（laap_kline 库）；失败返回 None（回退 SQLite）。"""
     global _pg_conn_factory, _pg_available
     if _pg_available is False:
         return None
     try:
         from laap.paper_trading.db import _PGConnection, _parse_database_url
-        # 连接参数：KLINE_DB_URL > DATABASE_URL（库名强制 laap-kline）> 默认
+        # 连接参数：KLINE_DB_URL > DATABASE_URL（库名强制 laap_kline）> 默认
         url = os.environ.get("KLINE_DB_URL") or os.environ.get("DATABASE_URL", "")
         if url:
             conf = _parse_database_url(url)
@@ -86,7 +86,7 @@ def _get_pg_conn():
         import psycopg
         raw = psycopg.connect(
             host=host, port=port, user=user, password=password,
-            dbname="laap-kline", connect_timeout=5)
+            dbname="laap_kline", connect_timeout=5)
         _pg_available = True
         return _PGConnection(raw)
     except Exception as e:
@@ -110,7 +110,7 @@ def _connect():
 def backend_name() -> str:
     """当前后端名称（诊断用）。"""
     if _BACKEND == "postgres" and _pg_available is not False:
-        return "postgres(laap-kline)"
+        return "postgres(laap_kline)"
     return "sqlite"
 
 
