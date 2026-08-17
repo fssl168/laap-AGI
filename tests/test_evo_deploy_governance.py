@@ -318,9 +318,21 @@ def test_evo_deploy_handler_missing_id():
     assert "mutation_id" in resp.text
 
 
-def test_evo_deploy_handler_not_found():
-    """未知 mutation_id → 409 + not_found。"""
-    from laap_brain.api import handle_evo_deploy
+def test_evo_deploy_handler_not_found(monkeypatch):
+    """未知 mutation_id → 409 + not_found。
+
+    2026-08-17 修复: 显式注入 fake 引擎到 _get_code_evolution_engine ——
+    此前依赖懒创建, 被 fixture 的 __init__ monkeypatch 污染模块级单例,
+    导致 handle_evo_deploy 拿到未初始化引擎 → 500 (测试隔离 bug)。
+    """
+    from laap_brain.api import handle_evo_deploy, _get_code_evolution_engine
+
+    class _FakeEngine:
+        def approve_and_deploy(self, mutation_id, approver="api"):
+            return {"status": "not_found", "mutation_id": mutation_id}
+
+    monkeypatch.setattr(
+        "laap_brain.api._get_code_evolution_engine", lambda: _FakeEngine())
 
     class _Req:
         async def json(self):
