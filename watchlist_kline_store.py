@@ -1,22 +1,42 @@
 # -*- coding: utf-8 -*-
 """
-自选股/指数 K 线持久化存储层（SQLite）。
+自选股/指数 K 线持久化存储层（PG16 优先，SQLite 回退）。
 
-数据库：D:\\laap-AGI\\data\\watchlist_kline\\kline.db
+后端:
+  - postgres（默认）: NAS fileclaw-postgres-vector PG16 的 laap-kline 库
+  - sqlite（回退）:   data/watchlist_kline/kline.db（PG 不可用时自动降级）
+
 表：
   - daily_kline(code, date, open, close, high, low, volume) 主键(code, date)
     code 格式：sh600326 / sz002790 / sh000001(上证指数) 等
+  - stock_names(code, name, updated)
 
 能力：
   - upsert_kline：每日落盘（INSERT OR REPLACE）
   - get_kline：取个股/指数最近 N 天日 K
   - get_ma：N 日均线（趋势分析）
   - get_latest：最新交易日概况（日常回顾："昨天自选股怎么样"）
+
+后端配置（环境变量）:
+  KLINE_DB_BACKEND=postgres|sqlite（默认 postgres）
+  KLINE_DB_URL=postgresql+asyncpg://fileclaw:fileclaw_secret@192.168.88.251:54322/laap-kline
+    （DATABASE_URL 未设置时用此；否则回退 DATABASE_URL 的 host/port/user/pass + laap-kline 库）
 """
+import logging
+import os
 import sqlite3
 from pathlib import Path
 
+logger = logging.getLogger("watchlist_kline_store")
+
 DB_PATH = Path(__file__).resolve().parent / "data" / "watchlist_kline" / "kline.db"
+
+# 后端选择：KLINE_DB_BACKEND 或继承 DATABASE_URL 存在性
+_BACKEND = os.environ.get("KLINE_DB_BACKEND", "postgres")
+if _BACKEND == "postgres" and not os.environ.get("DATABASE_URL") \
+        and not os.environ.get("KLINE_DB_URL"):
+    # 无任何 PG 配置时仍尝试默认（有 db.py 的默认参数可用）
+    pass
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_kline (
@@ -38,12 +58,60 @@ CREATE TABLE IF NOT EXISTS stock_names (
 );
 """
 
+# PG 连接（复用 db.py 的适配层）
+_pg_conn_factory = None
+_pg_available: bool | None = None
 
-def _connect() -> sqlite3.Connection:
+
+def _get_pg_conn():
+    """惰性获取 PG 连接（laap-kline 库）；失败返回 None（回退 SQLite）。"""
+    global _pg_conn_factory, _pg_available
+    if _pg_available is False:
+        return None
+    try:
+        from laap.paper_trading.db import _PGConnection, _parse_database_url
+        # 连接参数：KLINE_DB_URL > DATABASE_URL（库名强制 laap-kline）> 默认
+        url = os.environ.get("KLINE_DB_URL") or os.environ.get("DATABASE_URL", "")
+        if url:
+            conf = _parse_database_url(url)
+            if conf:
+                host, port, user, password = (
+                    conf["host"], conf["port"], conf["user"], conf["password"])
+            else:
+                host, port, user, password = (
+                    "192.168.88.251", 54322, "fileclaw", "fileclaw_secret")
+        else:
+            host, port, user, password = (
+                "192.168.88.251", 54322, "fileclaw", "fileclaw_secret")
+        import psycopg
+        raw = psycopg.connect(
+            host=host, port=port, user=user, password=password,
+            dbname="laap-kline", connect_timeout=5)
+        _pg_available = True
+        return _PGConnection(raw)
+    except Exception as e:
+        _pg_available = False
+        logger.warning(f"kline PG 连接失败，回退 SQLite ({e})")
+        return None
+
+
+def _connect():
+    """返回后端连接（PG 包装或 sqlite3，接口兼容：execute/executescript/commit/close/fetchone）。"""
+    if _BACKEND == "postgres":
+        conn = _get_pg_conn()
+        if conn is not None:
+            return conn
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
+
+
+def backend_name() -> str:
+    """当前后端名称（诊断用）。"""
+    if _BACKEND == "postgres" and _pg_available is not False:
+        return "postgres(laap-kline)"
+    return "sqlite"
 
 
 def init_db() -> None:
@@ -172,7 +240,8 @@ def db_stats() -> dict:
         total, codes, days = cur.fetchone()
         names = conn.execute("SELECT COUNT(*) FROM stock_names").fetchone()[0]
         return {"total_rows": total, "codes": codes, "days": days,
-                "names": names, "db_path": str(DB_PATH)}
+                "names": names, "db_path": str(DB_PATH),
+                "backend": backend_name()}
     finally:
         conn.close()
 
