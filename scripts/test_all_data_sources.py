@@ -2,7 +2,7 @@
 """LAAP 全量数据源测试（7 域 × 各源候选）
 
 逐域验证:
-  MARKET   行情取价    tx → xq → stub (2026-08-17: akshare 被东财 WAF 拒, 移除)
+  MARKET   行情取价    tx → em → xq → stub (2026-08-17: akshare 移除, em 东财直连)
   KLINE    K线        db → tushare → akshare → synthetic
   NEWS     新闻        eastmoney → sina → cls → tushare → bocha → tavily → minimax
   PROFILE  公司画像    individual_info → em_profile → cninfo
@@ -33,13 +33,14 @@ def test_market(symbol: str = "600519") -> dict:
     """
     from laap.paper_trading.data_sources import source_chain
     from laap.paper_trading.market_source import (
-        LiveMarketSource, TxMarketSource, XqMarketSource, resolve_source)
+        LiveMarketSource, TxMarketSource, EmMarketSource, XqMarketSource, resolve_source)
     out = {}
     chain = source_chain("MARKET")
     out["源链配置"] = chain
     handlers = {
         "akshare": lambda: LiveMarketSource().get_price(symbol),
         "tx": lambda: TxMarketSource().get_price(symbol),
+        "em": lambda: EmMarketSource().get_price(symbol),
         "xq": lambda: XqMarketSource().get_price(symbol),
     }
     for s in chain:
