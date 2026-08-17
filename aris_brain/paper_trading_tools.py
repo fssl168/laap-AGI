@@ -480,11 +480,18 @@ CREATE INDEX IF NOT EXISTS idx_sector_reports_created ON sector_reports(created_
 """
 
 
-def _sector_report_filename(sector: str) -> str:
-    """研报源文件名：YYYYMMDD_板块.md（板块名做文件系统安全清洗，量化按日期/板块读取）。"""
+def _sector_report_filename(sector: str, report_hash: str = "") -> str:
+    """研报源文件名：YYYYMMDD_板块_<hash8>.md（同日多版本保留，内容哈希前 8 位）。
+
+    板块名做文件系统安全清洗（`新能源 材料/锂电` → `新能源_材料_锂电`），
+    量化按日期前缀 + 板块名 + 哈希读取/归档；同内容同哈希 → 同名覆盖（去重），
+    不同内容 → 不同哈希 → 同日多版本并存。
+    """
     import re as _re
     safe = _re.sub(r'[\\/:*?"<>|\s]+', "_", str(sector or "").strip()) or "unknown"
-    return f"{datetime.now().strftime('%Y%m%d')}_{safe}.md"
+    h = str(report_hash or "")[:8]
+    suffix = f"_{h}" if h else ""
+    return f"{datetime.now().strftime('%Y%m%d')}_{safe}{suffix}.md"
 
 
 def _persist_sector_report(sector: str, content: str) -> tuple:
@@ -494,7 +501,7 @@ def _persist_sector_report(sector: str, content: str) -> tuple:
     同内容哈希去重：内容不变不重复写盘/入库。
     """
     report_hash = hashlib.sha1(content.encode("utf-8")).hexdigest()
-    fname = _sector_report_filename(sector)
+    fname = _sector_report_filename(sector, report_hash)
     try:
         Path(REPORT_DIR).mkdir(parents=True, exist_ok=True)
         fpath = os.path.join(REPORT_DIR, fname)

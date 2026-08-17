@@ -243,15 +243,20 @@ def test_sector_report_char_limit(tools, monkeypatch):
 def test_sector_report_filename(tools):
     from aris_brain.paper_trading_tools import _sector_report_filename
     from datetime import datetime as _dt
-    fname = _sector_report_filename("机器人")
-    assert fname == f"{_dt.now().strftime('%Y%m%d')}_机器人.md"
-    # 非法字符清洗
-    assert _sector_report_filename("新能源 材料/锂电") == \
-        f"{_dt.now().strftime('%Y%m%d')}_新能源_材料_锂电.md"
+    today = _dt.now().strftime('%Y%m%d')
+    # 带内容哈希 → 同日多版本格式 YYYYMMDD_板块_<hash8>.md
+    assert _sector_report_filename("机器人", "6be8cf74abcd1234") == \
+        f"{today}_机器人_6be8cf74.md"
+    # 非法字符清洗 + 哈希后缀
+    assert _sector_report_filename("新能源 材料/锂电", "abcdef12") == \
+        f"{today}_新能源_材料_锂电_abcdef12.md"
+    # 无哈希 → 不带后缀（向后兼容）
+    assert _sector_report_filename("机器人") == f"{today}_机器人.md"
 
 
 def test_sector_report_persist(tools, monkeypatch):
-    """研报落库（sector_reports 表）+ md 源文件保存 report/。"""
+    """研报落库（sector_reports 表）+ md 源文件保存 report/（YYYYMMDD_板块_<hash8>.md）。"""
+    import re as _re
     import sqlite3
 
     def _fetch(code, max_results=10):
@@ -263,15 +268,19 @@ def test_sector_report_persist(tools, monkeypatch):
     tools._SECTOR_REPORT_CACHE.clear()
     out = tools._sector_reports("机器人")
 
-    # md 源文件存在且内容与返回研报一致（不含"已保存"自指行）
-    from datetime import datetime as _dt
-    fname = f"{_dt.now().strftime('%Y%m%d')}_机器人.md"
+    # md 源文件存在，文件名 = YYYYMMDD_机器人_<hash8>.md，且 hash8 与内容一致
+    files = [f for f in os.listdir(tools.REPORT_DIR) if f.endswith(".md")]
+    assert len(files) == 1
+    fname = files[0]
+    assert _re.fullmatch(r"\d{8}_机器人_[0-9a-f]{8}\.md", fname), fname
     fpath = os.path.join(tools.REPORT_DIR, fname)
-    assert os.path.exists(fpath)
     with open(fpath, encoding="utf-8") as f:
         body = f.read().strip()
     assert "## 一、板块定位与核心驱动" in body
     assert "已保存" not in body
+    import hashlib
+    assert hashlib.sha1(body.encode("utf-8")).hexdigest()[:8] == \
+        fname.split("_")[-1].split(".")[0]
 
     # 落库：sector_reports 表一行，content 哈希主键
     conn = sqlite3.connect(tools.DB_PATH)
@@ -283,9 +292,8 @@ def test_sector_report_persist(tools, monkeypatch):
     assert row["sector"] == "机器人"
     assert row["content"] == body
     assert row["char_count"] == len(body)
-    import hashlib
     assert row["report_hash"] == hashlib.sha1(body.encode("utf-8")).hexdigest()
 
-    # 返回文本含保存提示
+    # 返回文本含保存提示（含文件名）
     assert "已保存" in out
     assert fname in out

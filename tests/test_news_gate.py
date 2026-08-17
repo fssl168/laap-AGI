@@ -151,6 +151,12 @@ class TestPublishTimeAlignment:
         assert len(filter_news_before([v], "2026-08-11")) == 1
 
 
+class _LiveStub:
+    """used_fallback=False 的行情源（测试成交用，绕过 fail-closed 降级拦截）。"""
+    def get_price(self, symbol, ts=None):
+        return 100.0, {"source": "test", "used_fallback": False}
+
+
 class TestIntegration:
     """与 run_daily_cycle 的 news_gate 可选参数集成。"""
 
@@ -158,12 +164,11 @@ class TestIntegration:
         import tempfile, os
         from laap.paper_trading.paper_service import PaperClosedLoop
         from laap.paper_trading.db import PaperDB
-        from laap.paper_trading.market_source import StubMarketSource
         tmp = os.path.join(tempfile.gettempdir(), "pt_news_gate.db")
         if os.path.exists(tmp):
             os.remove(tmp)
         db = PaperDB(db_path=tmp)
-        return PaperClosedLoop(db=db, market=StubMarketSource(), memory=None,
+        return PaperClosedLoop(db=db, market=_LiveStub(), memory=None,
                                initial_cash=1_000_000.0, enforce_t1=False), tmp
 
     def test_bearish_gate_vetoes_buy(self):
@@ -219,6 +224,39 @@ class TestIntegration:
             sig = r["signals"][0]
             assert sig["action"] == "buy"
             assert "news_gate" not in sig
+        finally:
+            import os
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+    def test_news_does_not_block_sell(self):
+        """文档契约：卖出/风控不被新闻拖延（news 只作用 buy）。"""
+        loop, tmp = self._loop()
+        try:
+            from laap.paper_trading import strategy
+            params = dict(strategy.STRATEGY_PARAMS)
+            # 温和上涨触发 multi_factor buy
+            closes_up = [100.0 + i * 1.0 for i in range(20)] + \
+                        [120.0 - i * 1.5 for i in range(8)] + \
+                        [108.0 + i * 0.55 for i in range(15)]
+            ohlcv_up = [(c - 0.1, c, c + 0.2, c - 0.2,
+                         300_000.0 if i == len(closes_up) - 1 else 100_000.0)
+                        for i, c in enumerate(closes_up)]
+            r_buy = loop.run_daily_cycle(
+                ["600519"], params, ohlcv_map={"600519": ohlcv_up})
+            assert r_buy["signals"][0]["action"] == "buy"
+            assert len(loop.ledger.open_positions()) == 1
+
+            # 单调下跌（trend_down）+ bearish news → sell 照常平仓（news 不阻碍）
+            closes_down = [200.0 - i * 2.0 for i in range(30)]
+            ohlcv_down = [(c - 0.5, c, c + 0.5, c - 0.8, 100_000.0)
+                          for c in closes_down]
+            gate = lambda sym: [{"verdict": "bearish", "confidence": 0.9}]
+            r_sell = loop.run_daily_cycle(
+                ["600519"], params, ohlcv_map={"600519": ohlcv_down},
+                news_gate=gate)
+            assert r_sell["signals"][0]["action"] == "sell"
+            assert len(loop.ledger.open_positions()) == 0
         finally:
             import os
             if os.path.exists(tmp):

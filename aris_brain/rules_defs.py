@@ -629,18 +629,32 @@ DEFAULT_RULES: List[Rule] = [
                 output_template="{result}",
             ),
             # ── 2026-08-16: paper_trading 能力清单规则 ──
-            # QQ 发 "paper_trading"/"trading"/"有哪些工具" 时, 规则引擎直接
-            # 返回能力清单（对齐 aris-paper-trading 技能内容, 不依赖 Hermes 技能加载）。
-            # 注意: 不能含裸 "paper"（会劫持论文规则），用完整词 "paper_trading"/"trading"。
+            # 只匹配带 paper_trading 前缀的查询 → 22 个交易工具清单。
+            # （Hermes 全景清单由 hermes_capability_rule 负责，避免"所有功能"
+            #  裸词误匹配——用户明确：本地按"所有功能"匹配同一个模板不正确）
             Rule(
                 name="pt_capability_rule",
-                patterns=["有哪些工具", "有什么功能", "能力清单", "你会什么", "你能做什么", "功能列表", "功能清单", "支持什么", "你有什么工具"],
+                patterns=["paper_trading 的所有功能", "paper_trading的所有功能", "paper_trading 所有功能", "paper_trading所有功能", "paper_trading 有哪些工具", "paper_trading有哪些工具", "paper_trading 功能列表", "paper_trading功能列表", "paper_trading 功能清单", "paper_trading功能清单", "paper_trading 有什么功能", "paper_trading有什么功能", "paper_trading 的工具", "paper_trading工具", "列出paper_trading", "列出 paper_trading", "paper_trading 能力", "paper_trading能力"],
                 intent="pt_capability",
-                description="paper_trading 能力清单（按分类完整列出）",
+                description="paper_trading 22个交易工具清单",
                 steps=[
                     RuleStep(tool="pt_health", params={}, output_key="health"),
                 ],
-                output_template="🛠️ 交易能力（paper_trading 直连）\n\n功能 | 你说什么 | 我做什么\n查账户 | \"查账户\" / \"账户列表\" | 显示账户信息（单系统单账户）\n查持仓 | \"查看持仓\" / \"我的持仓\" | 当前持仓明细\n看信号 | \"列出信号\" / \"有哪些信号\" | 最近 10 条交易信号\n看订单 | \"订单列表\" | 最近 10 条订单\n看成交 | \"成交记录\" | 最近 10 笔成交\n净值绩效 | \"绩效报告\" / \"盈亏\" | 净值曲线、累计盈亏\n跑回测 | \"跑个回测\" | 策略回测\n风控检查 | \"检查风控\" / \"risk check\" | 挂单数+今日交易数\n系统健康 | \"系统健康\" / \"health\" | 各表记录数、链路状态\n交易决策 | \"帮我看看买什么\" | 规则引擎决策（pt_decide）\n确认下单 | \"确认执行买入 600519\" | 实时取价 → 风控校验 → 下单\n平仓 | \"平掉 XX\" | 卖出持仓\n每日简报 | \"简报\" | 当日交易摘要\n演化治理 | \"演化审计\" | 参数演化记录审查\n\n🧠 认知能力\n记忆：我的记忆层级会随对话沉淀，记得你（丘伟枫）和我们的协作\n情感：有需求（胜任/自主/关联/确定性/意义）和情感状态，每次对话会更新\n自我认知：知道自己是 Aris，认知循环计数在持续积累\n演化：Recursive Self-Improvement——能对自己的交易参数做演化改进\n\n⚠️ 边界\n我是规则引擎驱动的\"哑模型\"：不走 Hermes 的工具循环，所以文件操作、网页搜索、代码执行这类 Hermes 能力我不具备。但交易这条线是我的主场——直接说指令就行，比如\"查看持仓\"。\n\n当前系统状态：\n{health}",
+                output_template="**📋 paper_trading 功能清单（22个交易工具）**\n\n| 类别 | 工具 | 功能 |\n|------|------|------|\n| **账户** | `pt_account_list` | 账户列表（单系统单账户） |\n| | `pt_account_show` | 账户详情 |\n| **持仓** | `pt_positions` | 查看持仓 |\n| | `pt_account_positions` | 持仓（规则别名） |\n| **策略** | `pt_strategies` | 策略列表 |\n| | `pt_strategy_list` | 策略（规则别名） |\n| **信号** | `pt_signals` | 信号列表（最近10条） |\n| **订单** | `pt_orders` | 订单列表（最近10条） |\n| **成交** | `pt_trades` | 成交列表（最近10笔） |\n| **绩效** | `pt_performance` | 绩效报告（净值/盈亏） |\n| | `pt_net_value` | 净值/盈亏摘要 |\n| **健康** | `pt_health` | 系统健康检查 |\n| **风控** | `pt_risk_check` | 风控检查 |\n| | `pt_risk_events` | 风控拒绝事件 |\n| **学习** | `pt_lessons` | 交易教训 |\n| **决策** | `pt_decide` | 交易决策建议（不下单） |\n| **执行** | `pt_execute` | 确认执行下单（需二次确认） |\n| **平仓** | `pt_close` | 平仓（需审核+确认） |\n| **简报** | `pt_brief` | 每日交易简报 |\n| **回测** | `pt_backtest_run` | 运行回测 |\n| **演化** | `pt_evolve` | 演化记录 |\n| | `pt_evolution_audit` | 进化治理提案 |\n\n---\n\n当前系统状态：\n{health}",
+                min_confidence=0.05,
+            ),
+            # ── 2026-08-16: Hermes 全景能力清单规则 ──
+            # 匹配"列出你所有功能"/"LAAP的所有功能"/"有哪些工具"等（无 paper_trading 前缀）→
+            # 输出 Hermes Agent 全景清单（与 NAS 完全一致）。
+            Rule(
+                name="hermes_capability_rule",
+                patterns=["列出你所有功能", "列出你的所有功能", "你所有功能", "你的所有功能", "LAAP的所有功能", "LAAP 的所有功能", "LAAP所有功能", "LAAP 所有功能", "LAAP的功能", "LAAP 的功能", "LAAP功能", "LAAP 功能", "LAAP有哪些功能", "LAAP 有哪些功能", "查LAAP", "有哪些工具", "有什么功能", "能力清单", "你会什么", "你能做什么", "功能列表", "功能清单", "支持什么", "你有什么工具"],
+                intent="hermes_capability",
+                description="Hermes Agent 全景能力清单（与 NAS 输出一致）",
+                steps=[
+                    RuleStep(tool="pt_health", params={}, output_key="health"),
+                ],
+                output_template="**📋 我的功能清单**\n\n---\n\n### 🤖 核心身份\n- **名称**: Hermes Agent\n- **模型**: agnes-2.5-flash\n- **提供商**: Agnes AI\n- **角色**: 枫哥的工作助理\n\n---\n\n### 🔧 可用工具 (24个)\n\n| 类别 | 工具 | 功能 |\n|------|------|------|\n| **对话** | `clarify` | 向用户提问获取澄清/反馈 |\n| **任务管理** | `todo` | 创建和管理待办事项列表 |\n| **记忆** | `memory` | 保存/检索持久化记忆 |\n| **搜索** | `session_search` | 搜索历史会话记录 |\n| **文件** | `read_file` | 读取文本文件 |\n| | `write_file` | 写入文件 |\n| | `patch` | 编辑文件（精确替换） |\n| | `search_files` | 搜索文件内容/名称 |\n| **代码** | `execute_code` | 执行 Python 脚本 |\n| **终端** | `terminal` | 执行 shell 命令 |\n| | `process` | 管理后台进程 |\n| **技能** | `skill_view` | 查看技能内容 |\n| | `skill_manage` | 创建/编辑/删除技能 |\n| | `skills_list` | 列出所有技能 |\n| **代理** | `delegate_task` | 委派子任务给子代理 |\n| **定时** | `cronjob` | 创建/管理定时任务 |\n| **视觉** | `vision_analyze` | 分析图片 |\n| **语音** | `text_to_speech` | 文字转语音 (TTS) |\n| **MCP** | `mcp__agnes_aigc_official__*` | Agnes AIGC 服务 (图像/视频/提示词) |\n\n---\n\n### 🔌 已集成服务\n\n| 服务 | 状态 | 功能 |\n|------|------|------|\n| **LAAP/Aris** | ✅ 已连接 | 认知引擎、记忆、交易决策 |\n| **paper_trading** | ✅ 已接入 | 22个交易工具（账户/持仓/净值/决策） |\n| **Agnes AIGC** | ✅ 已连接 | 图像生成、视频生成、提示词 |\n| **本地 LLM** | ✅ 可用 | MiniCPM5-1B-Q4_K_M (~10-17 t/s) |\n| **QQ消息** | ✅ 已连接 | 语音/文字双向互动 |\n\n---\n\n### 📊 已配置 Providers\n\n| Provider | 模型 | 用途 |\n|----------|------|------|\n| **agnes** | agnes-2.5-flash | 当前主力模型 |\n| **local** | MiniCPM5-1B | 快速本地问答 |\n| **nvidia** | deepseek-v4-flash | 云端推理 |\n| **laap** | laap-core | Aris 认知引擎 |\n\n---\n\n### 🎯 可执行任务类型\n\n1. **论文写作** - 科研论文、技术文档、格式排版\n2. **代码开发** - Python/Node.js/Shell 脚本、调试、重构\n3. **数据处理** - 数据分析、可视化、格式转换\n4. **系统运维** - Docker、服务部署、故障排查\n5. **AI 应用** - 模型测试、MCP 集成、工具链开发\n6. **研究分析** - 文献综述、实验设计、基准测试\n7. **日程管理** - 定时任务、提醒、自动化工作流\n\n---\n\n### 🚫 限制\n\n- ❌ 不能访问外部网络（部分 API 被墙）\n- ❌ 不能直接操作文件系统（需通过工具）\n- ❌ 不能自动执行危险命令（需确认）\n- ❌ 不能预测未来/提供投资建议\n\n---\n\n需要我演示哪个功能？👇",
                 min_confidence=0.05,
             ),
             # ── 2026-08-16: 自选股列表规则 ──

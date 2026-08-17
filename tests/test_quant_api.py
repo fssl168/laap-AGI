@@ -226,6 +226,32 @@ def test_quant_apply_params_ok(monkeypatch):
 
 
 # ════════════════════════════════════════════════════════════
+# /v1/quant/strategies 策略列表/映射
+# ════════════════════════════════════════════════════════════
+
+def test_quant_strategies_route_registered():
+    from laap_brain.api import create_app
+    app = create_app()
+    routes = {r.resource.canonical for r in app.router.routes() if r.resource}
+    assert "/v1/quant/strategies" in routes
+
+
+def test_quant_strategies_returns_mapping():
+    """返回所有策略（8 个）与映射字段 + default。"""
+    import laap_brain.api as api
+    resp = _run(api.handle_quant_strategies(_Req()))
+    assert resp.status == 200
+    d = json.loads(resp.text)
+    assert d["count"] == 8
+    assert d["default"] == "multi_factor"
+    names = {s["name"] for s in d["strategies"]}
+    assert "multi_factor" in names
+    assert "golden_cross" in names and "macd_momentum" in names
+    for s in d["strategies"]:
+        assert "display_name" in s and "description" in s and "type" in s
+
+
+# ════════════════════════════════════════════════════════════
 # 新闻情报闭环 API（P4）
 # ════════════════════════════════════════════════════════════
 

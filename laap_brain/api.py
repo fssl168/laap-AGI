@@ -1364,6 +1364,21 @@ async def handle_quant_self_status(request):
         return web.json_response({"error": "internal error"}, status=500)
 
 
+async def handle_quant_strategies(request):
+    """GET /v1/quant/strategies — 查询所有策略及映射（name/display_name/description/type）。"""
+    try:
+        from laap.paper_trading.strategy_templates import list_strategy_meta
+        strategies = list_strategy_meta()
+        return web.json_response({
+            "strategies": strategies,
+            "default": "multi_factor",
+            "count": len(strategies),
+        })
+    except Exception as e:
+        logger.warning(f"quant_strategies failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
 async def handle_quant_daily_cycle(request):
     """POST /v1/quant/daily_cycle — 日终闭环（真实K线→信号→交易自我审核→交易→净值）。
 
@@ -1374,7 +1389,10 @@ async def handle_quant_daily_cycle(request):
     except Exception:
         body = {}
     body = body or {}
-    symbols = body.get("symbols") or ["600519", "000001", "000858"]
+    symbols = body.get("symbols")
+    if not symbols:
+        from laap.paper_trading.daily_pipeline import _get_watchlist_symbols, DEFAULT_SYMBOLS
+        symbols = _get_watchlist_symbols() or DEFAULT_SYMBOLS
     params = body.get("params")
     if params is None:
         try:
@@ -1599,13 +1617,36 @@ async def handle_quant_decisions(request):
 
 
 async def handle_quant_kline(request):
-    """GET /v1/quant/kline — 查询K线数据 (symbol + days 参数)。"""
+    """GET /v1/quant/kline — 查询K线数据 (symbol + days 参数)。
+
+    返回完整OHLCV五元组 (open, close, high, low, volume)，供策略评估使用。
+    格式: [{"date": ..., "open": ..., "close": ..., "high": ..., "low": ..., "volume": ...}, ...]
+    """
     try:
-        from laap.paper_trading.kline_source import load_price_series
+        from laap.paper_trading.kline_source import load_ohlcv
         symbol = request.query.get("symbol", "600519")
         days = int(request.query.get("days", "120"))
-        data = load_price_series(symbol, days=days)
-        return web.json_response({"symbol": symbol, "days": days, "data": data})
+        ohlcv, quality = load_ohlcv(symbol, days=days, with_quality=True)
+
+        # 转换为JSON格式
+        # OHLCV格式: (open, close, high, low, volume)
+        data = []
+        for row in ohlcv:
+            data.append({
+                "open": row[0],
+                "close": row[1],
+                "high": row[2],
+                "low": row[3],
+                "volume": row[4] if len(row) > 4 else 0
+            })
+
+        return web.json_response({
+            "symbol": symbol,
+            "days": days,
+            "data": data,
+            "quality": quality,
+            "count": len(data)
+        })
     except Exception as e:
         logger.warning(f"quant_kline failed: {e}")
         return web.json_response({"error": str(e)}, status=500)
@@ -1830,6 +1871,7 @@ def create_app() -> web.Application:
     app.router.add_post("/v1/quant/decisions", handle_quant_decision_record)
     app.router.add_get("/v1/quant/lessons", handle_quant_lessons)
     app.router.add_get("/v1/quant/self/status", handle_quant_self_status)
+    app.router.add_get("/v1/quant/strategies", handle_quant_strategies)
     app.router.add_post("/v1/quant/daily_cycle", handle_quant_daily_cycle)
     app.router.add_post("/v1/quant/apply_params", handle_quant_apply_params)
     app.router.add_post("/v1/quant/evolve", handle_quant_evolve)
