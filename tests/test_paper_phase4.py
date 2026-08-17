@@ -16,8 +16,21 @@ from laap.paper_trading import strategy
 
 
 @pytest.fixture()
-def loop(tmp_path):
+def loop(tmp_path, monkeypatch):
     from laap.agi.unified_memory import UnifiedMemory
+    # 交易时段桩：run_daily_cycle 内层 decide_and_trade 有时间门（2026-08-17 起）
+    import laap.paper_trading.paper_service as ps
+    import datetime as _dt
+    class _N:
+        hour = 14
+        minute = 0
+        def strftime(self, f):
+            return "14:00"
+    class _FakeDT:
+        @staticmethod
+        def now():
+            return _N()
+    monkeypatch.setattr(ps, "datetime", _FakeDT)
     db = PaperDB(db_path=str(tmp_path / "pt.db"))
 
     class _FakeLiveMarket:
@@ -130,8 +143,10 @@ def _up_ohlcv(days=43):
 
 def test_run_daily_cycle_buys_on_uptrend(loop):
     """上涨趋势 → run_daily_cycle 产生 buy 信号 + 成交。"""
+    params = dict(strategy.STRATEGY_PARAMS)
+    params["position_scale"] = 0.05  # 兼容 R2 单票≤10%（默认 0.5 会被风控拒）
     result = loop.run_daily_cycle(
-        ["600519"], dict(strategy.STRATEGY_PARAMS),
+        ["600519"], params,
         ohlcv_map={"600519": _up_ohlcv()})
     assert result["signals"][0]["action"] == "buy"
     assert result["signals"][0]["trade_id"]
@@ -152,7 +167,9 @@ def test_run_daily_cycle_hold_when_flat(loop):
 
 def test_run_daily_cycle_sell_when_held_and_downtrend(loop):
     """先持仓买入（up），再下跌行情 → sell 平仓。"""
-    loop.run_daily_cycle(["600519"], dict(strategy.STRATEGY_PARAMS),
+    params = dict(strategy.STRATEGY_PARAMS)
+    params["position_scale"] = 0.05  # 兼容 R2 单票≤10%
+    loop.run_daily_cycle(["600519"], params,
                          ohlcv_map={"600519": _up_ohlcv()})
     assert len(loop.ledger.open_positions()) == 1
 
@@ -161,7 +178,7 @@ def test_run_daily_cycle_sell_when_held_and_downtrend(loop):
         c = 200.0 - i * 2.0
         down.append((c - 0.5, c, c + 0.5, c - 0.8, 100_000.0))
     result = loop.run_daily_cycle(
-        ["600519"], dict(strategy.STRATEGY_PARAMS),
+        ["600519"], params,
         ohlcv_map={"600519": down})
     assert result["signals"][0]["action"] == "sell"
     assert len(loop.ledger.open_positions()) == 0

@@ -21,8 +21,21 @@ from laap.paper_trading.memory_bridge import retrieve_for_symbol
 # 记忆闭环 E2E：决策→下单→成交→平仓→教训沉淀→下次命中
 # ════════════════════════════════════════════════════════════
 
-def test_memory_closed_loop_e2e(tmp_path):
+def test_memory_closed_loop_e2e(tmp_path, monkeypatch):
     from laap.agi.unified_memory import UnifiedMemory
+    # 交易时段桩：decide_and_trade 有时间门（2026-08-17 起），非交易时段拒单
+    import laap.paper_trading.paper_service as ps
+    import datetime as _dt
+    class _N:
+        hour = 14
+        minute = 0
+        def strftime(self, f):
+            return "14:00"
+    class _FakeDT:
+        @staticmethod
+        def now():
+            return _N()
+    monkeypatch.setattr(ps, "datetime", _FakeDT)
 
     db = PaperDB(db_path=str(tmp_path / "pt.db"))
     market = StubMarketSource(base_prices={"600519": 100.0})

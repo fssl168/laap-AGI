@@ -77,6 +77,13 @@ def _laap_get(endpoint: str, params: Optional[dict] = None) -> dict:
         return {"error": str(e), "source": "laap_mcp_server"}
 
 
+@mcp.resource("memory://default")
+def laap_memory_default() -> str:
+    """LAAP default memory context: recall recent memories from the hierarchy."""
+    result = _laap_post("/v1/recall_memory", {"query": "", "limit": 10})
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
 @mcp.tool()
 def laap_cognitive_state(input: str) -> str:
     """

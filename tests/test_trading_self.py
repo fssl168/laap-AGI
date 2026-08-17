@@ -199,10 +199,23 @@ def test_sell_not_blocked_by_low_self_efficacy(self_model, memory):
 # ════════════════════════════════════════════════════════════
 
 @pytest.fixture()
-def loop(tmp_path, memory):
+def loop(tmp_path, memory, monkeypatch):
     from laap.paper_trading.db import PaperDB
     from laap.paper_trading.market_source import StubMarketSource
     from laap.paper_trading.paper_service import PaperClosedLoop
+    # 交易时段桩：decide_and_trade 有时间门（2026-08-17 起），非交易时段拒单
+    import laap.paper_trading.paper_service as ps
+    import datetime as _dt
+    class _N:
+        hour = 14
+        minute = 0
+        def strftime(self, f):
+            return "14:00"
+    class _FakeDT:
+        @staticmethod
+        def now():
+            return _N()
+    monkeypatch.setattr(ps, "datetime", _FakeDT)
     db = PaperDB(db_path=str(tmp_path / "pt.db"))
     return PaperClosedLoop(db, StubMarketSource(base_prices={"600519": 100.0}),
                            memory, initial_cash=1_000_000.0, enforce_t1=False)
@@ -243,7 +256,7 @@ def test_issue_sell_closes_and_reflects(loop, self_model, memory):
     assert rep["reflected"] is True
 
 
-def test_run_daily_cycle_with_trading_self(tmp_path):
+def test_run_daily_cycle_with_trading_self(tmp_path, monkeypatch):
     """run_daily_cycle 挂 TradingSelf：审核通过才执行，产出 self_verdict。"""
     from laap.paper_trading.db import PaperDB
     from laap.paper_trading.market_source import StubMarketSource
@@ -252,6 +265,19 @@ def test_run_daily_cycle_with_trading_self(tmp_path):
     from laap.paper_trading import strategy
     from laap.agi.unified_memory import UnifiedMemory
     from laap.agi.self_model import EmergentSelfModel
+    # 交易时段桩：run_daily_cycle 内层 decide_and_trade 有时间门
+    import laap.paper_trading.paper_service as ps
+    import datetime as _dt
+    class _N:
+        hour = 14
+        minute = 0
+        def strftime(self, f):
+            return "14:00"
+    class _FakeDT:
+        @staticmethod
+        def now():
+            return _N()
+    monkeypatch.setattr(ps, "datetime", _FakeDT)
 
     db = PaperDB(db_path=str(tmp_path / "pt.db"))
     memory = UnifiedMemory()
@@ -270,7 +296,9 @@ def test_run_daily_cycle_with_trading_self(tmp_path):
         vol = 300_000.0 if i == len(closes) - 1 else 100_000.0
         ohlcv.append((c - 0.1, c, c + 0.2, c - 0.2, vol))
 
-    result = loop.run_daily_cycle(["600519"], dict(strategy.STRATEGY_PARAMS),
+    params = dict(strategy.STRATEGY_PARAMS)
+    params["position_scale"] = 0.05  # 兼容 R2 单票≤10%（默认 0.5 会被风控拒）
+    result = loop.run_daily_cycle(["600519"], params,
                                   ohlcv_map={"600519": ohlcv})
     sig = result["signals"][0]
     # TradingSelf 审核通过 → buy 且带 self_verdict

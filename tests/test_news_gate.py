@@ -200,7 +200,8 @@ class TestIntegration:
                      for i, c in enumerate(closes)]
             gate = lambda sym: [{"verdict": "genuine_bullish", "confidence": 0.9}]
             r = loop.run_daily_cycle(
-                ["600519"], {"fast_ma": 5, "slow_ma": 10}, ohlcv_map={"600519": ohlcv},
+                ["600519"], {"fast_ma": 5, "slow_ma": 10, "position_scale": 0.05},
+                ohlcv_map={"600519": ohlcv},
                 strategy="golden_cross", news_gate=gate)
             sig = r["signals"][0]
             assert sig["action"] == "buy"
@@ -218,8 +219,11 @@ class TestIntegration:
             ohlcv = [(closes[i-1] if i else c, c, c*1.01, c*0.99, 1000.0)
                      for i, c in enumerate(closes)]
             # 不传 news_gate：行为不变（buy 照常，无 news_gate 字段）
+            # 注：position_scale 设小以兼容 R2 单票≤10%（默认 0.5 会被 R2 拒，
+            #     此处测的是 news_gate 逻辑而非风控门）
             r = loop.run_daily_cycle(
-                ["600519"], {"fast_ma": 5, "slow_ma": 10}, ohlcv_map={"600519": ohlcv},
+                ["600519"], {"fast_ma": 5, "slow_ma": 10, "position_scale": 0.05},
+                ohlcv_map={"600519": ohlcv},
                 strategy="golden_cross")
             sig = r["signals"][0]
             assert sig["action"] == "buy"
@@ -229,12 +233,27 @@ class TestIntegration:
             if os.path.exists(tmp):
                 os.remove(tmp)
 
-    def test_news_does_not_block_sell(self):
+    def test_news_does_not_block_sell(self, monkeypatch):
         """文档契约：卖出/风控不被新闻拖延（news 只作用 buy）。"""
+        # 交易时段桩：run_daily_cycle 内层 decide_and_trade 有时间门，
+        # 非交易时段（如 16:xx 沙箱时间）下单会被拒——打 14:00 桩。
+        import laap.paper_trading.paper_service as ps
+        import datetime as _dt
+        class _N:
+            hour = 14
+            minute = 0
+            def strftime(self, f):
+                return "14:00"
+        class _FakeDT:
+            @staticmethod
+            def now():
+                return _N()
+        monkeypatch.setattr(ps, "datetime", _FakeDT)
         loop, tmp = self._loop()
         try:
             from laap.paper_trading import strategy
             params = dict(strategy.STRATEGY_PARAMS)
+            params["position_scale"] = 0.05  # 兼容 R2 单票≤10%（默认 0.5 会被拒）
             # 温和上涨触发 multi_factor buy
             closes_up = [100.0 + i * 1.0 for i in range(20)] + \
                         [120.0 - i * 1.5 for i in range(8)] + \

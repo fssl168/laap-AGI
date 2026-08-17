@@ -89,8 +89,21 @@ def test_fee_reduces_pnl_versus_zero(ledger, tmp_path):
     assert p0 == pytest.approx(1000.0)
 
 
-def test_decide_and_trade_with_fee(tmp_path):
+def test_decide_and_trade_with_fee(tmp_path, monkeypatch):
     """PaperClosedLoop.decide_and_trade 注入 FeeModel → 成交扣费（fill_price 为滑点后价）。"""
+    # 交易时段桩：decide_and_trade 有时间门（2026-08-17 起），非交易时段拒单
+    import laap.paper_trading.paper_service as ps
+    import datetime as _dt
+    class _N:
+        hour = 14
+        minute = 0
+        def strftime(self, f):
+            return "14:00"
+    class _FakeDT:
+        @staticmethod
+        def now():
+            return _N()
+    monkeypatch.setattr(ps, "datetime", _FakeDT)
     db = PaperDB(db_path=str(tmp_path / "loop.db"))
     market = StubMarketSource(base_prices={"600519": 100.0}, seed=1)
     loop = PaperClosedLoop(db=db, market=market, memory=None,
