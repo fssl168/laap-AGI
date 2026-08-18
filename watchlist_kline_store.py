@@ -27,6 +27,7 @@
 import logging
 import os
 import sqlite3
+import time
 from pathlib import Path
 
 logger = logging.getLogger("watchlist_kline_store")
@@ -345,9 +346,12 @@ def upsert_stock_names(names: dict) -> int:
     init_db()
     conn = _connect()
     try:
+        # 2026-08-18: datetime('now') 是 SQLite 语法，PG 报
+        # "function datetime(unknown) does not exist" → 改 Python 侧传时间戳。
+        now = time.time()
         conn.executemany(
-            "INSERT OR REPLACE INTO stock_names (code, name, updated) VALUES (?, ?, datetime('now'))",
-            [(c, n) for c, n in names.items()],
+            "INSERT OR REPLACE INTO stock_names (code, name, updated) VALUES (?, ?, ?)",
+            [(c, n, now) for c, n in names.items()],
         )
         conn.commit()
         return len(names)
