@@ -32,7 +32,8 @@ def test_script_compiles():
 
 
 def test_fetch_market_mock(script_mod):
-    """mock 腾讯响应：解析出行情数据与数据日期（2026-08-17：mock 脚本自身 _fetch_url）。"""
+    """mock 腾讯响应：解析出行情数据与数据日期。"""
+    # 脚本已自带 urllib 实现（2026-08-17 起不再依赖 src.agent.tools.search_tools）
     with patch.object(script_mod, "_fetch_url", return_value=SAMPLE_RAW):
         data_date, indices = script_mod.fetch_market()
 

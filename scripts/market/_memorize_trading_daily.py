@@ -6,33 +6,16 @@
 
 Aris 下次对话自动感知跨日复盘（"昨天亏了，今天谨慎些"）。
 与教训双写共用语义记忆写锁（memory_bridge._semantic_memory_lock），防并发写 JSON。
-
-数据库: PaperDB（PG16 laap_trading 优先，SQLite laap_trading.db 回退）。
 """
 import datetime
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-
-def _connect():
-    """PaperDB 连接（PG 优先，SQLite 回退），兼容 sqlite3 风格。"""
-    from laap.paper_trading.db import PaperDB
-    db = PaperDB()
-    return db.conn()
-
-
-def _today_filter(ts_col: str) -> str:
-    """按天过滤表达式（PG/SQLite 兼容）。"""
-    try:
-        from laap.paper_trading.db import pg_available
-        if pg_available():
-            return f"to_timestamp({ts_col})::date = current_date"
-    except Exception:
-        pass
-    return f"date({ts_col},'unixepoch','localtime') = date('now','localtime')"
+DB_PATH = str(Path(__file__).resolve().parent.parent.parent / "data" / "paper_trading.db")
 
 
 def fetch_trading_status(conn) -> dict:
@@ -52,8 +35,8 @@ def fetch_trading_status(conn) -> dict:
 
     # 今日交易
     cur = conn.execute(
-        f"SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM trades "
-        f"WHERE {_today_filter('entry_ts')}")
+        "SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM trades "
+        "WHERE date(entry_ts,'unixepoch','localtime') = date('now','localtime')")
     cnt, pnl = cur.fetchone()
     status["trades_today"] = cnt
     status["pnl_today"] = round(pnl, 2) if pnl else 0.0
@@ -72,8 +55,8 @@ def fetch_trading_status(conn) -> dict:
 
     # 风控
     cur = conn.execute(
-        f"SELECT COUNT(*) FROM risk_rejections "
-        f"WHERE {_today_filter('ts')}")
+        "SELECT COUNT(*) FROM risk_rejections "
+        "WHERE date(ts,'unixepoch','localtime') = date('now','localtime')")
     status["risk_rejections"] = cur.fetchone()[0]
     return status
 
@@ -110,7 +93,8 @@ def write_to_semantic_memory(summary: str) -> bool:
 
 def main():
     try:
-        conn = _connect()
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         try:
             status = fetch_trading_status(conn)
         finally:

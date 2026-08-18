@@ -66,10 +66,11 @@ def test_phase1_tools_graceful_when_db_empty(registry):
 def test_quant_event_types_added():
     from laap.agi.cognitive_bus import CognitiveEventType
     for name in ("QUANT_SIGNAL", "QUANT_TRADE_CLOSED", "QUANT_RISK_TRIGGERED",
-                 "QUANT_DAILY_SETTLE", "QUANT_EVOLUTION_PROPOSED"):
+                 "QUANT_DAILY_SETTLE", "QUANT_EVOLUTION_PROPOSED",
+                 "SYSTEM_FAULT"):
         assert hasattr(CognitiveEventType, name), f"{name} 缺失"
-    # 11 原有 + 5 新增
-    assert len([e for e in CognitiveEventType]) == 16
+    # 11 原有 + 5 QUANT_* + 1 SYSTEM_FAULT（2026-08-18 错误进化桥）
+    assert len([e for e in CognitiveEventType]) == 17
 
 
 def test_quant_event_publish():

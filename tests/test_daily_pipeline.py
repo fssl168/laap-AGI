@@ -33,7 +33,8 @@ class _FakeLoop:
     def __init__(self):
         self.calls = []
 
-    def run_daily_cycle(self, symbols, params, ohlcv_map=None, strategy=None):
+    def run_daily_cycle(self, symbols, params, ohlcv_map=None, strategy=None,
+                        news_gate=None):
         self.calls.append(params)
         return {"signals": [{"action": "hold"}],
                 "net_value": {"total": 1_000_000.0},

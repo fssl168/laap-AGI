@@ -705,13 +705,7 @@ class SandboxTester:
     def _audit_log(self, entry: Dict[str, Any]) -> None:
         """记录沙箱测试审计日志 (M1 硬化)。"""
         try:
-            # 跨平台守卫（2026-08-18）：LAAP_ROOT 若是 Windows 盘符路径（如
-            # D:\laap-AGI），非 Windows 平台 `Path(...)/state` 会把整个字符串
-            # 当相对路径，在项目根下 mkdir 出 `D:\laap-AGI/state` 垃圾目录。
-            root_env = os.environ.get("LAAP_ROOT", "")
-            if root_env and os.name != "nt" and re.match(r"^[A-Za-z]:[\\/]", root_env):
-                root_env = ""
-            log_dir = Path(root_env or str(Path.cwd())) / "state"
+            log_dir = Path(os.environ.get("LAAP_ROOT", str(Path.cwd()))) / "state"
             log_dir.mkdir(parents=True, exist_ok=True)
             log_path = log_dir / "sandbox_test_audit.jsonl"
             with open(log_path, "a", encoding="utf-8") as f:

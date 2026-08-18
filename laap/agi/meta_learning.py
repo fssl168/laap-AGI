@@ -45,6 +45,8 @@ class LearningStrategy(str, Enum):
     SPACED_REPETITION = "spaced"      # 间隔重复, 对抗遗忘
     ACTIVE_RECALL = "active_recall"   # 主动回忆, 测试驱动
     TEACHING = "teaching"             # 通过教别人来学
+    # 运维处置通用策略（2026-08-18: error_evolution_bridge L3 使用）
+    OPERATIONAL = "operational"
 
 
 @dataclass

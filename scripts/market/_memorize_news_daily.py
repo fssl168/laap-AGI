@@ -45,7 +45,7 @@ def build_pipeline():
     from laap.paper_trading.llm_sources import build_llm_call
     from laap.paper_trading.quant_config import build_fee_model
 
-    db = PaperDB()  # 生产：走 PG（laap_trading），PG 不可用回退 SQLite
+    db = PaperDB(db_path=str(ROOT / "data" / "paper_trading.db"))
     loop = PaperClosedLoop(db=db, market=StubMarketSource(),
                            memory=None, initial_cash=1_000_000.0,
                            trading_self=None)

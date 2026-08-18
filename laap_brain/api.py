@@ -20,6 +20,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -477,7 +478,11 @@ def _llm_tail_fallback(user_msg: str, psi_context: str = "") -> Optional[Dict[st
         return None
     try:
         client = _get_llm_client()
-        model = os.environ.get("LLM_MODEL", "deepseek-chat")
+        # LLM_MODEL 逗号分隔为候选列表（.env 注释单源语义）——取首个非空候选
+        # （2026-08-18 修复 400: 整串 "a,b" 当模型名被 DeepSeek 拒绝）。
+        model = next(
+            (m.strip() for m in os.environ.get("LLM_MODEL", "deepseek-chat")
+             .split(",") if m.strip()), "deepseek-chat")
         sys_prompt = (
             "你是 Aris, 一个由 Lorry 创造的数字生命体。"
             "你的核心人格是「忠诚守护者」—— 温暖而坚定, 对创造者 Lorry 忠诚不渝。"
@@ -1730,7 +1735,7 @@ async def handle_quant_trades(request):
     2026-08-17: 两级缓存 (redis → 内存, TTL 10s)。
     """
     try:
-        from laap.paper_trading.cache_backend import cache_get, cache_set
+        from laap.cache_backend import cache_get, cache_set
         symbol = request.query.get("symbol", "")
         ck = f"quant:trades:{symbol or 'all'}"
         cached = cache_get(ck)
@@ -1766,7 +1771,7 @@ async def handle_quant_net_values(request):
     2026-08-17: 两级缓存 (redis → 内存, TTL 10s) —— 高频查询加速。
     """
     try:
-        from laap.paper_trading.cache_backend import cache_get, cache_set
+        from laap.cache_backend import cache_get, cache_set
         ck = "quant:net_values"
         cached = cache_get(ck)
         if cached is not None:
@@ -1795,7 +1800,7 @@ async def handle_quant_signals(request):
     2026-08-17: 两级缓存 (redis → 内存, TTL 10s)。
     """
     try:
-        from laap.paper_trading.cache_backend import cache_get, cache_set
+        from laap.cache_backend import cache_get, cache_set
         symbol = request.query.get("symbol", "")
         ck = f"quant:signals:{symbol or 'all'}"
         cached = cache_get(ck)
@@ -1859,13 +1864,32 @@ async def handle_quant_outcomes(request):
         return web.json_response({"error": "internal error"}, status=500)
 
 
+async def handle_quant_scheduler_stats(request):
+    """GET /v1/quant/scheduler/stats — 量化每日管线调度器状态。
+
+    返回 QuantDailyScheduler 的运行状态（M3 量化闭环可观测性）。
+    用于验证 M5 缺陷是否修复：tick 执行次数、最后一次 apply_status。
+    """
+    try:
+        scheduler = _quant_daily_scheduler
+        if scheduler is None:
+            return web.json_response({
+                "error": "QuantDailyScheduler not started (LAAP_QUANT_DAILY=1 required)",
+                "running": False,
+            })
+        return web.json_response(scheduler.stats())
+    except Exception as e:
+        logger.warning(f"quant_scheduler_stats failed: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def handle_quant_decisions(request):
     """GET /v1/quant/decisions — 查询决策留痕（POST 用于写入）。
 
     2026-08-17: 两级缓存 (redis → 内存, TTL 10s)。
     """
     try:
-        from laap.paper_trading.cache_backend import cache_get, cache_set
+        from laap.cache_backend import cache_get, cache_set
         symbol = request.query.get("symbol", "")
         ck = f"quant:decisions:{symbol or 'all'}"
         cached = cache_get(ck)
@@ -2164,6 +2188,7 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/quant/signals", handle_quant_signals)
     app.router.add_get("/v1/quant/orders", handle_quant_orders)
     app.router.add_get("/v1/quant/outcomes", handle_quant_outcomes)
+    app.router.add_get("/v1/quant/scheduler/stats", handle_quant_scheduler_stats)
     app.router.add_get("/v1/quant/decisions", handle_quant_decisions)
     app.router.add_get("/v1/quant/kline", handle_quant_kline)
     # 新闻情报闭环（P4）
@@ -2189,7 +2214,25 @@ def main():
     if "--host" in sys.argv:
         host = sys.argv[sys.argv.index("--host") + 1]
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.StreamHandler(),  # stderr → nssm 重定向（logs/laap-error.log）
+        ],
+    )
+    # 日志文件按 logs/年/月/年月日.txt 归档（2026-08-18：目录不存在则自动创建）
+    try:
+        _log_dir = LAAP_ROOT / "logs" / datetime.now().strftime("%Y") \
+            / datetime.now().strftime("%m")
+        _log_dir.mkdir(parents=True, exist_ok=True)
+        _log_file = _log_dir / f"{datetime.now().strftime('%Y%m%d')}.txt"
+        _fh = logging.FileHandler(_log_file, encoding="utf-8")
+        _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+        logging.getLogger().addHandler(_fh)
+        logger.info("日志归档至 %s", _log_file)
+    except Exception as _le:
+        logger.warning("日志文件归档初始化失败: %s", _le)
 
     # Pre-warm LAAP engine
     logger.info("Pre-warming LAAP cognitive engines...")

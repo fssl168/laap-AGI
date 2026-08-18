@@ -12,6 +12,11 @@ import pytest
 # PAPER_TRADING_DB_BACKEND=postgres（source 过 .env），setdefault 不覆盖已存在值，
 # 导致测试静默连 PG（_brief 的 SQLite date() 语法在 PG 上崩）。测试必须物理隔离。
 os.environ["PAPER_TRADING_DB_BACKEND"] = "sqlite"
+# 交易库路径隔离 (2026-08-18): 不设 PAPER_TRADING_DB_PATH 会回退生产
+# data/laap_trading.db → TradingSelf._load_historical_oos 读到生产净值导致
+# 测试判定漂移（如 test_trading_self 的 approve→reject）。强制独立临时库。
+os.environ["PAPER_TRADING_DB_PATH"] = os.path.join(
+    os.environ.get("TEMP", "/tmp"), "laap_test_paper.db")
 # K线库隔离 (2026-08-18): 与交易库同纪律——不连 NAS PG16 watchlist_kline_store
 os.environ["KLINE_DB_BACKEND"] = "sqlite"
 # 认知引擎 DB 隔离 (2026-08-17): 强制 sqlite + 临时库, 不碰生产 data/laap.db / PG
@@ -19,6 +24,11 @@ os.environ["COGNITIVE_DB_BACKEND"] = "sqlite"
 os.environ.setdefault(
     "COGNITIVE_DB_PATH",
     os.path.join(os.environ.get("TEMP", "/tmp"), "laap_test_cognitive.db"))
+# 语义记忆文件隔离 (2026-08-18): 测试进程不与 ARIS/psi_core 争用同一
+# laap_semantic_memory.json（服务持有文件锁 → 测试写入 WinError 32/5 且
+# 影响 paper_replay 确定性）。独立临时路径。
+os.environ["LAAP_SEMANTIC_MEMORY_PATH"] = os.path.join(
+    os.environ.get("TEMP", "/tmp"), "laap_test_semantic_memory.json")
 # API 鉴权隔离 (2026-08-18): 置空 LAAP_API_KEY。api 模块 import 时会 load_dotenv
 # 从 .env 注入真实 key，导致假设"默认开放 API"的端点测试（test_laap_api/test_laap_tools）
 # 被 auth_middleware 拒 401。load_dotenv(override=False) 不会覆盖已存在的空值；

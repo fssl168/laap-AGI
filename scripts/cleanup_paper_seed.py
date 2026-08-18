@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -26,33 +25,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _default_db_path() -> Path:
-    from laap.paper_trading.db import _is_windows_drive_abs
     env = ROOT / ".env"
     if env.exists():
         for line in env.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line.startswith("PAPER_TRADING_DB_PATH="):
                 p = Path(line.split("=", 1)[1].strip())
-                if os.name != "nt" and _is_windows_drive_abs(str(p)):
-                    break  # Windows 盘符路径在非 Windows 无效 → 回退项目根相对路径
                 if p.exists():
                     return p
                 break
-    return ROOT / "data" / "laap_trading.db"
+    return ROOT / "data" / "paper_trading.db"
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="清理 paper seed 演示交易")
-    ap.add_argument("--db", default="", help="显式指定 SQLite 库路径（默认走 PG laap_trading）")
+    ap.add_argument("--db", default=str(_default_db_path()))
     ap.add_argument("--apply", action="store_true", help="真正删除（默认仅预览）")
     args = ap.parse_args()
 
-    # 连接：显式 --db → SQLite；否则 PaperDB（PG 优先）
-    if args.db:
-        conn = sqlite3.connect(args.db)
-    else:
-        from laap.paper_trading.db import PaperDB
-        conn = PaperDB().conn()
+    conn = sqlite3.connect(args.db)
     cur = conn.cursor()
 
     # 1. 找出 seed trades（含"启动演示"标记）

@@ -62,17 +62,7 @@ def test_phase3_zero_dangling(registry):
 # 2. 简报工具
 # ════════════════════════════════════════════════════════════
 
-def test_brief_returns_structure(registry, monkeypatch, tmp_path):
-    # 沙箱挂载盘（9p）SQLite 写会 disk I/O error：注入 tmp 可写 DB 路径，
-    # 让 PaperDB 幂等建表（net_values 等），工具才能查询并输出"净值"。
-    # 2026-08-18 修复跨文件泄漏：pt_brief 主路径走 PaperDB()（读 env
-    # PAPER_TRADING_DB_PATH，非 ptt.DB_PATH 模块属性），必须同时把 env 指向
-    # tmp 才能让 PaperDB 在可写路径建表；否则 phase1/phase2 先行时挂载盘
-    # schema init 失败 → 兜底到空 tmp → "no such table: net_values"。
-    import aris_brain.paper_trading_tools as ptt
-    monkeypatch.setenv("PAPER_TRADING_DB_BACKEND", "sqlite")
-    monkeypatch.setenv("PAPER_TRADING_DB_PATH", str(tmp_path / "pt.db"))
-    monkeypatch.setattr(ptt, "DB_PATH", str(tmp_path / "pt.db"))
+def test_brief_returns_structure(registry):
     out = registry.get("pt_brief")()
     assert isinstance(out, str)
     assert "简报" in out

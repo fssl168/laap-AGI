@@ -37,7 +37,7 @@ def _default_db_path() -> Path:
     2026-08-17: SQLite 回退库从 paper_trading.db 改为 laap_trading.db（含历史数据）。
     2026-08-18: 非 Windows 平台忽略 .env 里的 Windows 盘符绝对路径（防 D: 垃圾目录）。
     """
-    from laap.paper_trading.db import _is_windows_drive_abs
+    from laap.paper_trading.db import is_windows_drive_abs
     env = ROOT / ".env"
     if env.exists():
         for line in env.read_text(encoding="utf-8").splitlines():

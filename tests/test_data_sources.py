@@ -14,8 +14,7 @@ def test_source_chain_default(monkeypatch):
               "LLM_SOURCES"):
         monkeypatch.delenv(k, raising=False)
     assert source_chain("PROFILE") == ["individual_info", "em_profile", "cninfo"]
-    assert source_chain("MARKET") == ["tx", "em", "tickplus", "xq", "akshare",
-                                      "stub"]
+    assert source_chain("MARKET") == ["tx", "em", "tickplus", "xq", "akshare", "stub"]
     assert source_chain("KLINE") == ["db", "tushare", "tencent", "akshare",
                                      "synthetic"]
     assert source_chain("NEWS") == ["eastmoney", "sina", "cls", "tushare",
@@ -35,7 +34,7 @@ def test_source_chain_runtime_adjustable(monkeypatch):
     monkeypatch.delenv("PROFILE_SOURCES", raising=False)
 
 
-def test_resolve_first_first_success():
+def test_resolve_first_first_success(monkeypatch):
     calls = []
 
     def a():
@@ -45,12 +44,14 @@ def test_resolve_first_first_success():
     def b():
         calls.append("b")
         return "B"
+    # 固定链，避免 .env 的 MARKET_SOURCES 覆盖（tx,em,xq,stub 无 akshare）
+    monkeypatch.setenv("MARKET_SOURCES", "akshare,stub")
     result, source = resolve_first("MARKET", {"akshare": a, "stub": b})
     assert (result, source) == ("A", "akshare")
     assert calls == ["a"]  # 只用第一个成功源
 
 
-def test_resolve_first_fallback():
+def test_resolve_first_fallback(monkeypatch):
     calls = []
 
     def a():
@@ -60,6 +61,7 @@ def test_resolve_first_fallback():
     def b():
         calls.append("b")
         return "B"
+    monkeypatch.setenv("MARKET_SOURCES", "akshare,stub")
     result, source = resolve_first("MARKET", {"akshare": a, "stub": b})
     assert (result, source) == ("B", "stub")
     assert calls == ["a", "b"]  # 第一个失败 → 回退第二个

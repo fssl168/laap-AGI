@@ -18,8 +18,8 @@ LAAP_ROOT = str(Path(__file__).resolve().parent.parent)
 # 2026-08-18：非 Windows 平台忽略 Windows 盘符绝对路径（同 laap.paper_trading.db 守卫）。
 # 测试可通过 monkeypatch DB_PATH 覆盖（如 tmp 路径）。
 def _default_paper_db_path() -> str:
-    from laap.paper_trading.db import _default_db_path
-    return _default_db_path()
+    from laap.paper_trading.db import default_db_path
+    return default_db_path()
 
 
 DB_PATH = _default_paper_db_path()

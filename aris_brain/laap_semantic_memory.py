@@ -16,7 +16,10 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 BRAIN_DIR = Path(__file__).resolve().parent
-MEMORY_PATH = BRAIN_DIR / "laap_semantic_memory.json"
+# 语义记忆文件路径：支持 LAAP_SEMANTIC_MEMORY_PATH 覆盖（测试隔离用，
+# 避免测试进程与 ARIS/服务争用同一 JSON 文件；2026-08-18）
+_env_mem = os.environ.get("LAAP_SEMANTIC_MEMORY_PATH", "").strip()
+MEMORY_PATH = Path(_env_mem) if _env_mem else BRAIN_DIR / "laap_semantic_memory.json"
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_EMBEDDING_DIM = 1536

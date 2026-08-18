@@ -34,6 +34,13 @@ sys.path.insert(0, str(ARIS_BRAIN / "psi_jspace_bridge"))
 import requests
 from mcp.server.fastmcp import FastMCP
 
+# 与 api.py 对齐：MCP server 自己加载 .env，不依赖外部环境变量传递（Hermes MCP env 可能缺失）
+try:
+    from dotenv import load_dotenv
+    load_dotenv(LAAP_ROOT / ".env")
+except Exception:
+    pass
+
 LAAP_API_BASE = os.environ.get("LAAP_API_BASE", "http://localhost:11546")
 
 mcp = FastMCP("laap-brain")

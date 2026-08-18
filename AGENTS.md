@@ -14,6 +14,7 @@
   - **契约单源**：同一业务语义只允许一个定义点，禁止平行实现。
   - **最小改动**：默认稳定性优先；非当前任务直接需要的重构/抽象/迁移一律克制。
   - **本地量化文件不进 git**：`laap/paper_trading/` 按 `.gitignore` 排除（NAS 不同步约定），量化代码/数据为本地资产。
+  - **资产分层 / 验证可复现**：git 跟踪的代码 + 测试 + 验证脚本必须能在任意时刻复现同口径结论；数值型结果（JSON）在 `real_data/` 与 `data/` 中,不进 git 但必须可通过 `scripts/verify_quant_evidence.py --offline` 聚合为 `report/quant_evidence_summary_<date>.md`;详细阈值契约见 `report/QUANT_EVIDENCE.md`。
 
 ---
 
@@ -32,16 +33,33 @@
 - 修改用户可见能力 / API / 部署 / 通知 / 报告结构时，同步更新 `docs/CHANGELOG.md` 与相关 `docs/*.md`。
 - 注释、docstring、日志文案以清晰准确为准，不强制英文，与文件语境一致。
 
-## 2.1 死循环防范规则
+### 2.1 死循环防范规则
 
 - 写文件成功后直接用文字回复用户，禁止用 bash echo 或工具调用来"验证"写文件。Write/Edit 失败会直接报错——无报错即成功。
 - 禁止 `echo "OK"`/`echo "DONE"` 等无意义命令占位；禁止无实际问题时连续 3 次以上同模式工具调用；禁止用工具调用"填补等待"。
 - 若发现自己连续 3 次执行同模式工具调用，立即停止，转文字回复。
 
-## 2.2 记忆与经验复用
+### 2.2 记忆与经验复用
 
 - 会话开始时读取 `memory/memory/MEMORY.md` 及其引用文件（用户画像/量化背景/项目愿景/防工具刷屏等），前次会话教训必须载入。
 - 量化项目有失败先例，改动要避免重蹈"有骨架、没闭环""契约漂移"的覆辙。
+
+---
+
+### 2.3 资产分层与同步契约
+
+项目资产按"是否进 git"分为三层,每层有明确的所有权与同步策略,避免"两边都不管"的死角:
+
+| 层 | 路径 | 版本控制 | 同步方式 | 典型内容 |
+|---|---|---|---|---|
+| **git 层** | 仓库根 / `laap/` / `laap_brain/` / `aris_brain/` / `psi_core/` / `scripts/` / `tests/` | ✅ 进 git | 推送到 `origin`(github.com/fssl168/laap-AGI) | 代码、测试、验证脚本、`report/*.md` |
+| **NAS 同步层** | `laap/paper_trading/` / `data/` / `docs/` / `real_data/` / `state/` / `report/` 研报 md | ❌ 不进 git | `scripts/sync_laap_to_nas.py` 推向 NAS | 量化源码、真实数据、研报、本地文档 |
+| **运行时层** | `logs/` / `__pycache__/` / `*.log` / `*.bak*` / `.venv/` | ❌ 不进 git + 不备份 | 可重建,无需同步 | 日志、缓存、临时文件 |
+
+**强制规则**:
+- 新增目录若不属于运行时层,必须明确归入 git 层或 NAS 层,并在 `.gitignore` / 同步脚本中补齐对应条目。
+- `scripts/verify_quant_evidence.py --offline` 是 CI / 沙箱下的证据复现入口,不得删除或改名。
+- `report/QUANT_EVIDENCE.md` 是阈值契约的单一事实来源,当阈值变化时同步更新。
 
 ---
 
@@ -119,13 +137,13 @@
   - `laap_brain/`：API / 工具 / 装配
   - `aris_brain/`：认知桥 / 情感 / 目标引擎
   - `psi_core/`：PSI 内核
-- 数据：`data/laap_trading.db`（paper 账本）、`data/watchlist_kline/kline.db`（真实 K 线）
+- 数据：`data/paper_trading.db`（paper 账本）、`data/watchlist_kline/kline.db`（真实 K 线）
 - 量化文档：`docs/news-intel-closed-loop-implementation-plan.md`（闭环计划）、`docs/phase2-multi-factor-strategy-plan.md`（多因子）、`docs/rsi-paper-evidence-verification.md`（论文证据）
 
 ### 4.1 板块研报产物约定（量化读取口径）
 
 - **md 源文件**：板块研报生成后输出到 `report/YYYYMMDD_板块_<hash8>.md`（内容 sha1 前 8 位作后缀）。量化读取约定：**按日期前缀过滤当天、按板块名过滤、同板块多版本按文件名哈希区分**（同内容同哈希 → 同名覆盖去重；不同内容 → 同日多版本并存）。板块名做文件系统安全清洗（空格/`/\:*?"<>|` → `_`）。
-- **DB 索引**：`data/laap_trading.db` 的 `sector_reports` 表提供研报**全量历史与内容哈希索引**（`report_hash` = sha1(content) 主键；`sector` / `created_ts` 建索引；字段：report_hash/sector/content/file_path/char_count/created_ts）。
+- **DB 索引**：`data/paper_trading.db` 的 `sector_reports` 表提供研报**全量历史与内容哈希索引**（`report_hash` = sha1(content) 主键；`sector` / `created_ts` 建索引；字段：report_hash/sector/content/file_path/char_count/created_ts）。
 - **模板**：`report/report.md` 是研报输出的**模板文件**（四段式格式样例：一、板块定位与核心驱动；二、关键细分方向梳理；三、当前阶段的选股/选赛道框架；四、风险提示）。生成研报须对齐该模板结构。
 - **输出约束**：研报总字符 ≤2000 字；返回文本末尾附 `> 📁 已保存 report/<文件名>（hash=xxxxxxxx）` 提示（在 2000 字上限内）。
 

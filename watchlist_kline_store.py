@@ -48,8 +48,8 @@ def _default_db_path() -> Path:
     if env_path:
         if os.name != "nt":
             try:
-                from laap.paper_trading.db import _is_windows_drive_abs
-                if _is_windows_drive_abs(env_path):
+                from laap.paper_trading.db import is_windows_drive_abs
+                if is_windows_drive_abs(env_path):
                     logger.warning(
                         f"WATCHLIST_KLINE_DB_PATH={env_path!r} 是 Windows 盘符路径，"
                         f"非 Windows 平台忽略，回退默认路径"
@@ -116,12 +116,12 @@ def _get_pg_conn():
     if _pg_available is False:
         return None
     try:
-        from laap.paper_trading.db import _PGConnection, _parse_database_url
+        from laap.paper_trading.db import _PGConnection, parse_database_url
         # 连接参数：KLINE_DB_URL > DATABASE_URL（库名随 URL）> 默认
         url = os.environ.get("KLINE_DB_URL") or os.environ.get("DATABASE_URL", "")
         dbname = "watchlist_kline_store"  # 默认 K线库
         if url:
-            conf = _parse_database_url(url)
+            conf = parse_database_url(url)
             if conf:
                 host, port, user, password = (
                     conf["host"], conf["port"], conf["user"], conf["password"])
@@ -159,9 +159,9 @@ def _connect():
 def backend_name() -> str:
     """当前后端名称（诊断用）。"""
     if _BACKEND == "postgres" and _pg_available is not False:
-        from laap.paper_trading.db import _parse_database_url
+        from laap.paper_trading.db import parse_database_url
         url = os.environ.get("KLINE_DB_URL") or os.environ.get("DATABASE_URL", "")
-        conf = _parse_database_url(url) if url else None
+        conf = parse_database_url(url) if url else None
         dbname = conf["db"] if conf else "watchlist_kline_store"
         return f"postgres({dbname})"
     return "sqlite"
@@ -191,7 +191,7 @@ def upsert_kline(rows) -> int:
         conn.commit()
         # 写后失效缓存 (2026-08-17)
         try:
-            from laap.paper_trading.cache_backend import cache_clear_prefix
+            from laap.cache_backend import cache_clear_prefix
             codes = {r[0] for r in rows}
             for code in codes:
                 cache_clear_prefix(f"kline:{code}:")
@@ -202,17 +202,35 @@ def upsert_kline(rows) -> int:
         conn.close()
 
 
+def _norm_row(r) -> tuple:
+    """行规范化：PG 适配层返回 dict、SQLite 返回 tuple → 统一 tuple。
+
+    2026-08-18 修复：SQLite→PG 迁移后 `_PGCursor.fetchall()` 走 `_to_dict`，
+    get_kline 返回值从 tuple 漂移为 dict，导致 kline_source.load_ohlcv /
+    load_price_series / get_ma 按索引 r[1..5] 访问时 KeyError → db 源永远失效、
+    全量回退 tushare（日志特征: "load_ohlcv real kline failed ... : 1"）。
+    契约统一为 (date, open, close, high, low, volume)。
+    """
+    if isinstance(r, dict):
+        return (r["date"], r["open"], r["close"], r["high"], r["low"], r["volume"])
+    return tuple(r)
+
+
 def get_kline(code: str, days: int = 30) -> list:
     """取个股/指数最近 N 天日 K（按日期升序）。
+
+    返回行格式统一为 tuple: (date, open, close, high, low, volume)——
+    SQLite 后端原生 tuple；PG 后端适配层返回 dict，此处规范化对齐
+    （2026-08-18 修复，见 _norm_row）。
 
     2026-08-17: 两级缓存 (redis → 内存 TTL, 默认 60s) —— K线是最高频读取
     (每日 tick 34 只 × 多次), 缓存避免重复查库。
     """
-    from laap.paper_trading.cache_backend import cache_get, cache_set
+    from laap.cache_backend import cache_get, cache_set
     ck = f"kline:{code}:{days}"
     cached = cache_get(ck)
     if cached is not None:
-        return cached
+        return [_norm_row(r) for r in cached]
     init_db()
     conn = _connect()
     try:
@@ -224,7 +242,7 @@ def get_kline(code: str, days: int = 30) -> list:
         rows = cur.fetchall()
         result = list(reversed(rows))  # 升序
         cache_set(ck, result, ttl=_KLINE_CACHE_TTL)
-        return result
+        return [_norm_row(r) for r in result]
     finally:
         conn.close()
 
@@ -342,7 +360,7 @@ def get_stock_names(codes: list = None) -> dict:
 
     2026-08-17: 两级缓存 (redis → 内存 TTL)。
     """
-    from laap.paper_trading.cache_backend import cache_get, cache_set
+    from laap.cache_backend import cache_get, cache_set
     ck = "kline:names:all" if not codes else "kline:names:" + ",".join(codes)
     cached = cache_get(ck)
     if cached is not None:
@@ -385,7 +403,7 @@ def save_trading_calendar(dates: set, synced_at: str = "") -> None:
         conn.commit()
         # 写后失效缓存 (2026-08-17)
         try:
-            from laap.paper_trading.cache_backend import cache_clear_prefix
+            from laap.cache_backend import cache_clear_prefix
             cache_clear_prefix("kline:trading_calendar")
         except Exception:
             pass
@@ -399,7 +417,7 @@ def load_trading_calendar() -> tuple:
     2026-08-17: 两级缓存 (redis → 内存 TTL) 加速高频读取。
     """
     import json
-    from laap.paper_trading.cache_backend import cache_get, cache_set
+    from laap.cache_backend import cache_get, cache_set
     ck = "kline:trading_calendar"
     cached = cache_get(ck)
     if cached is not None:

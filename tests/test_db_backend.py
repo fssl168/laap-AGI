@@ -94,7 +94,7 @@ def test_adapt_sql_question_to_percent():
 def test_adapt_sql_no_params_unchanged():
     sql, params = _adapt_sql("SELECT 1", None)
     assert sql == "SELECT 1"
-    assert params is None  # psycopg: None 参数不解析标记（避免 LIKE % 误判）
+    assert params is None
 
 
 def test_adapt_sql_scalar_param():

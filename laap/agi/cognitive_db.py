@@ -179,7 +179,7 @@ def fetch_all(table: str, limit: int = 1000) -> List[Dict[str, Any]]:
     2026-08-17: 两级缓存 (redis → 内存 TTL) —— 高速读取命中缓存不查 DB。
     TTL: 默认 30s (认知引擎写入频率中等, 短暂延迟可接受)。
     """
-    from laap.paper_trading.cache_backend import cache_get, cache_set
+    from laap.cache_backend import cache_get, cache_set
     ck = f"cognitive:{table}:all:{limit}"
     cached = cache_get(ck)
     if cached is not None:
@@ -208,7 +208,7 @@ def fetch_where(table: str, where: str, params: List[Any],
 
     2026-08-17: 两级缓存 (redis → 内存 TTL)。
     """
-    from laap.paper_trading.cache_backend import cache_get, cache_set
+    from laap.cache_backend import cache_get, cache_set
     ck = f"cognitive:{table}:w:{where}:{','.join(str(p) for p in params)}:{limit}"
     cached = cache_get(ck)
     if cached is not None:
@@ -228,7 +228,7 @@ def fetch_where(table: str, where: str, params: List[Any],
 
 def invalidate(table: str) -> None:
     """写入后失效该表的缓存 (2026-08-17)。"""
-    from laap.paper_trading.cache_backend import cache_clear_prefix
+    from laap.cache_backend import cache_clear_prefix
     try:
         cache_clear_prefix(f"cognitive:{table}:")
     except Exception:

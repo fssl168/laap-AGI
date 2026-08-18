@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def _init_db(db_path: str | None):
-    from laap.paper_trading.db import PaperDB, _default_db_path
-    path = db_path or _default_db_path()
+    from laap.paper_trading.db import PaperDB, default_db_path
+    path = db_path or default_db_path()
     db = PaperDB(db_path=path)
     print(f"[OK] 数据库已初始化: {path}")
     return db

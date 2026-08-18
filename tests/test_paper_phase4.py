@@ -231,7 +231,7 @@ def test_load_ohlcv_with_quality_structure():
     assert isinstance(ohlcv, list)
     # 沙箱可能真实数据（kline.db）或降级合成——两者都须是合法 OHLCV
     assert len(ohlcv) >= 0
-    assert quality["source"] in ("real", "synthetic")
+    assert quality["source"] in ("real", "synthetic", "tencent")
     assert "used_fallback" in quality
     assert quality["adjust"] == "qfq"
 
@@ -266,6 +266,6 @@ def test_run_daily_cycle_data_quality_real_or_synthetic(loop):
     result = loop.run_daily_cycle(
         ["600519"], dict(strategy.STRATEGY_PARAMS), ohlcv_map=None)
     q = result["data_quality"]["600519"]
-    assert q["source"] in ("real", "synthetic")  # 沙箱为 synthetic
+    assert q["source"] in ("real", "synthetic", "tencent")  # 沙箱为 synthetic/tencent
     assert "used_fallback" in q
     assert q["adjust"] == "qfq"
