@@ -264,10 +264,12 @@ def register_default_tools(registry) -> None:
                 interactions = d.get('context', {}).get('interaction_count', '?')
         except Exception:
             pass
-        # 记忆库统计
+        # 记忆库统计（2026-08-18 迁移到 state/，旧路径兜底兼容）
         mem_lines, mem_topics = [], []
         try:
-            mf = base / 'laap_semantic_memory.json'
+            mf = base / 'state' / 'laap_semantic_memory.json'
+            if not mf.exists():
+                mf = base / 'laap_semantic_memory.json'  # 旧路径兜底
             if mf.exists():
                 mdata = _j.loads(mf.read_text(encoding='utf-8'))
                 mems = mdata.get('memories', [])
