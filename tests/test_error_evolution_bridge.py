@@ -1,4 +1,4 @@
-"""ARIS 错误进化桥单测 (error_evolution_bridge: L1 事件感知 + L2 记忆 + L3 学习)。"""
+"""ARIS 错误进化桥单测 (error_evolution_bridge: L1 事件 + L2 记忆 + L3 学习 + L4 漂移防护)。"""
 import os
 import sys
 
@@ -39,9 +39,10 @@ class _FakeMeta:
         self.sessions.append(kw)
 
 
-def _make_event(payload):
-    from laap.paper_trading.event_bus import Event
-    return Event("system.internal.error_alert", payload, source="orchestrator")
+def _make_event(payload, topic=None):
+    from laap.paper_trading.event_bus import Event, T_SYSTEM_INTERNAL
+    return Event(topic or f"{T_SYSTEM_INTERNAL}.error_alert", payload,
+                 source="orchestrator")
 
 
 class TestErrorEvolutionBridge:
@@ -99,7 +100,7 @@ class TestErrorEvolutionBridge:
         assert meta.sessions[0]["successful"] is True  # 自动处置=成功
 
     def test_attach_detach_subscription(self):
-        from laap.paper_trading.event_bus import EventBus
+        from laap.paper_trading.event_bus import EventBus, T_SYSTEM_INTERNAL
         from laap.agi.error_evolution_bridge import ErrorEvolutionBridge
         bus = EventBus()
         cb = _FakeCognitiveBus()
@@ -108,7 +109,7 @@ class TestErrorEvolutionBridge:
         br.attach()
         assert bus.subscriber_count() == 1
         got = []
-        bus.subscribe("system.internal.error_alert",
+        bus.subscribe(f"{T_SYSTEM_INTERNAL}.error_alert",
                       lambda ev: got.append(ev.type))
         bus.publish(_make_event({"summary": "x", "analyses": [],
                                  "counts": {}}))
@@ -116,3 +117,47 @@ class TestErrorEvolutionBridge:
         assert br.faults_notified == 1
         br.detach()
         assert bus.subscriber_count() == 1  # 只剩测试订阅
+
+    def test_l4_topic_uses_single_source_constant(self):
+        from laap.paper_trading.event_bus import T_SYSTEM_INTERNAL
+        from laap.agi.error_evolution_bridge import ErrorEvolutionBridge
+        br, cb, mem, meta = self._bridge()
+        assert br._error_alert_topic == f"{T_SYSTEM_INTERNAL}.error_alert"
+
+    def test_l4_malformed_analysis_flagged_and_skipped(self):
+        from laap.agi.cognitive_bus import CognitiveEventType
+        br, cb, mem, meta = self._bridge()
+        br._handle_error_alert(_make_event({
+            "summary": "s",
+            "analyses": [
+                {"category": "unknown_cat", "root_cause": "unknown_rc",
+                 "count": 1, "priority": 2, "action": "x"},
+                {"category": "database", "priority": 2,
+                 "root_cause": "db_read_error", "count": 1,
+                 "action": "人工检查", "sample": "no such table"}],
+            "counts": {"unknown_cat": 1, "database": 1}}))
+        assert br.drift_checks == 1
+        assert br.drift_violations == 1
+        assert br.last_drift is not None
+        assert any(et == CognitiveEventType.BUSINESS_DRIFT
+                   for et, _, _ in cb.published)
+        # 非法根因/分类的分析被跳过，合法 database 分析仍沉淀/学习
+        assert len(mem.experiences) == 1
+        assert len(meta.sessions) == 1
+        assert "系统故障教训: database" in mem.experiences[0][0]
+
+    def test_l4_valid_payload_no_drift(self):
+        from laap.agi.cognitive_bus import CognitiveEventType
+        br, cb, mem, meta = self._bridge()
+        br._handle_error_alert(_make_event({
+            "summary": "s",
+            "analyses": [
+                {"category": "datasource", "priority": 1,
+                 "root_cause": "partial_source_failure", "count": 10,
+                 "action": "已自动切换", "sample": "fallback to stub"}],
+            "counts": {"datasource": 10}}))
+        assert br.drift_checks == 1
+        assert br.drift_violations == 0
+        assert not any(et == CognitiveEventType.BUSINESS_DRIFT
+                       for et, _, _ in cb.published)
+        assert len(mem.experiences) == 1

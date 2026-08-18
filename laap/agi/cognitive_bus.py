@@ -221,6 +221,8 @@ class CognitiveEventType(str, Enum):
     QUANT_EVOLUTION_PROPOSED = "quant_evolution_proposed"
     # ── 错误进化桥 (2026-08-18) ──
     SYSTEM_FAULT = "system_fault"
+    # ── 业务漂移防护 (L4, 2026-08-18) ──
+    BUSINESS_DRIFT = "business_drift"
 
 
 @dataclass

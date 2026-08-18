@@ -245,3 +245,13 @@ class TestEventOrchestrator:
         orch.publish_trade("600519", "buy", {"qty": 100})
         assert "trade.600519.buy" in got
         orch.stop()
+
+    def test_aggregate_error_counts_sums_same_category(self):
+        from laap.paper_trading.event_orchestrator import _aggregate_error_counts
+        analyses = [
+            {"category": "database", "count": 2},
+            {"category": "database", "count": 3},
+            {"category": "datasource", "count": 5},
+        ]
+        assert _aggregate_error_counts(analyses) == {
+            "database": 5, "datasource": 5}

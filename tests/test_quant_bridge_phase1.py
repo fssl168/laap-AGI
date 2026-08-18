@@ -67,10 +67,10 @@ def test_quant_event_types_added():
     from laap.agi.cognitive_bus import CognitiveEventType
     for name in ("QUANT_SIGNAL", "QUANT_TRADE_CLOSED", "QUANT_RISK_TRIGGERED",
                  "QUANT_DAILY_SETTLE", "QUANT_EVOLUTION_PROPOSED",
-                 "SYSTEM_FAULT"):
+                 "SYSTEM_FAULT", "BUSINESS_DRIFT"):
         assert hasattr(CognitiveEventType, name), f"{name} 缺失"
-    # 11 原有 + 5 QUANT_* + 1 SYSTEM_FAULT（2026-08-18 错误进化桥）
-    assert len([e for e in CognitiveEventType]) == 17
+    # 11 原有 + 5 QUANT_* + SYSTEM_FAULT + BUSINESS_DRIFT（2026-08-18 错误进化桥 L1/L4）
+    assert len([e for e in CognitiveEventType]) == 18
 
 
 def test_quant_event_publish():
