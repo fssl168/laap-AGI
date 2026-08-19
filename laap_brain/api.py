@@ -158,6 +158,21 @@ def _news_symbols() -> List[str]:
     return [_normalize_symbol(s) for s in str(raw).split(",") if s.strip()]
 
 
+def _market_watch_symbols() -> List[str]:
+    """总览实时行情标的 = 自选股(STOCK_LIST) ∪ 盘中轮询(LAAP_NEWS_SYMBOLS)，
+    去重保持顺序；都未设用默认 3 只。"""
+    try:
+        from laap.paper_trading.daily_pipeline import _get_watchlist_symbols
+        pool = [s for s in (_get_watchlist_symbols() or []) if s]
+    except Exception:
+        pool = []
+    merged: List[str] = []
+    for s in pool + _news_symbols():
+        if s and s not in merged:
+            merged.append(s)
+    return merged or ["600519", "000001", "000858"]
+
+
 def _start_news_worker() -> Optional[Any]:
     """启动新闻盘中轮询（LAAP_NEWS_INTRADAY=1 显式开启，默认关闭）。
 
@@ -964,6 +979,11 @@ async def handle_chat_completions(request):
                     yield f"data: {json.dumps({'id': request_id, 'object':'chat.completion.chunk','created':created,'model':model,'choices':[{'index':0,'delta':{'content':chunk},'finish_reason':None}]})}\n\n"
                     await asyncio.sleep(0.02)
             yield f"data: {json.dumps({'id': request_id, 'object':'chat.completion.chunk','created':created,'model':model,'choices':[{'index':0,'delta':{},'finish_reason':finish_reason}]})}\n\n"
+            # 结束块携带 engine 元数据（支持批次：SSE 前端流式结束后可渲染规则命中徽章）
+            meta = {"engine": engine}
+            if response_extra and response_extra.get("tool_decision"):
+                meta["tool_decision"] = response_extra.get("tool_decision")
+            yield f"data: {json.dumps({'id': request_id, 'object':'chat.completion.chunk','created':created,'model':model,'engine':meta.get('engine'),'tool_decision':meta.get('tool_decision'),'choices':[{'index':0,'delta':{},'finish_reason':'stop'}]})}\n\n"
             yield "data: [DONE]\n\n"
 
         resp = web.StreamResponse(
@@ -1531,6 +1551,532 @@ async def handle_quant_self_status(request):
         return web.json_response({"error": "internal error"}, status=500)
 
 
+async def handle_quant_personality_get(request):
+    """GET /v1/quant/personality — 人格设定（P2）：三预设 + 当前激活 + 生效风控。
+
+    只读快照；预设 traits 锁定（params_locked=true）。鉴权：保持 Bearer
+    （GET/POST 同路径，路径级免检会同时放开 POST，故不放行）。
+    """
+    try:
+        from laap.paper_trading.persona import (
+            PRESET_META, persona_engine)
+        from laap.paper_trading import quant_config as qc
+        from laap.paper_trading.trading_self import PERSONA_PRESETS
+        engine = persona_engine()
+        presets = []
+        for pid, meta in PRESET_META.items():
+            presets.append({
+                "id": pid,
+                "name": meta["name"],
+                "traits": PERSONA_PRESETS.get(pid, {}),
+                "params_locked": True,
+                "risk_scale": meta["risk_scale"],
+                "sensitivity_scale": meta["sensitivity_scale"],
+            })
+        risk_keys = ("MAX_POS_PER_STOCK", "MAX_TOTAL_POS",
+                     "MAX_DAILY_LOSS_PCT", "MAX_STOP_LOSS_PCT")
+        effective_risk = {k: engine.effective(k) for k in risk_keys}
+        baseline = {k: qc.get(k) for k in risk_keys}
+        ts = _get_trading_self()
+        derived = ts.trading_identity() if ts is not None else {}
+        active = engine.describe()
+        active["derived"] = derived
+        active["effective_risk"] = effective_risk
+        return web.json_response({
+            "presets": presets,
+            "active": active,
+            "baseline": baseline,
+            "ts": time.time(),
+        })
+    except Exception as e:
+        logger.warning(f"quant_personality_get failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_personality_set(request):
+    """POST /v1/quant/personality — 激活预设 / 保存自定义人格（P2）。
+
+    body: {preset: conservative|balanced|aggressive} 或 {custom: {traits: {...}}}
+    - 预设参数锁定：POST 带 traits 被忽略（traits 由 trading_self.PERSONA_PRESETS 单源）
+    - 自定义 traits 值域 0~1，越界 clamp；risk_appetite 可选显式值
+    - 保存后重建 TradingSelf 单例 + 广播 system.internal.config.updated（前端同步）
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    try:
+        from laap.paper_trading.persona import activate, PRESET_META
+    except Exception as e:
+        logger.warning(f"persona import failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+    preset_id = body.get("preset")
+    custom = body.get("custom")
+    try:
+        if preset_id:
+            if preset_id not in PRESET_META:
+                return web.json_response(
+                    {"error": f"unknown preset: {preset_id} "
+                              f"(expected {list(PRESET_META)})"}, status=400)
+            describe = activate(preset_id=preset_id)
+        elif isinstance(custom, dict) and isinstance(custom.get("traits"), dict):
+            describe = activate(custom_traits=custom["traits"])
+        else:
+            return web.json_response(
+                {"error": "preset or custom.traits required"}, status=400)
+    except Exception as e:
+        logger.warning(f"quant_personality_set failed: {e}")
+        return web.json_response({"error": f"personality update failed: {e}"}, status=400)
+    # 重建 TradingSelf 单例（preset 覆盖 + 新 risk_scale 生效）
+    global _trading_self
+    _trading_self = None
+    _get_trading_self()
+    # 广播：前端 settings ③ 人格区 / ② 参数区自动刷新（前后端同步生效）
+    try:
+        from laap.paper_trading.event_bus import EventBus, Event
+        EventBus().publish(Event(
+            "system.internal.config.updated",
+            {"keys": ["personality"], "mode": describe.get("mode"),
+             "preset_id": describe.get("preset_id"), "ts": time.time()},
+            source="api:personality"))
+    except Exception as e:
+        logger.debug(f"personality broadcast skipped: {e}")
+    return web.json_response({
+        "active": describe,
+        "message": "人格已生效：影响全局风控阈值与策略灵敏度",
+        "ts": time.time(),
+    })
+
+
+async def handle_quant_memory_status(request):
+    """GET /v1/quant/memory/status — 记忆体计数 + 语义记忆开关（P3）。"""
+    try:
+        from laap.paper_trading.memory_api import status as _mem_status
+        ts = _get_trading_self()
+        memory = getattr(ts, "memory", None) if ts is not None else None
+        return web.json_response(_mem_status(memory))
+    except Exception as e:
+        logger.warning(f"quant_memory_status failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_memory_runtime(request):
+    """GET /v1/quant/memory/runtime?scope=profile|work|learning&limit= — 运行时记忆。"""
+    try:
+        from laap.paper_trading.memory_api import runtime as _mem_runtime
+        scope = request.query.get("scope") or "profile"
+        limit = request.query.get("limit")
+        ts = _get_trading_self()
+        memory = getattr(ts, "memory", None) if ts is not None else None
+        return web.json_response(_mem_runtime(scope, memory=memory, limit=limit))
+    except Exception as e:
+        logger.warning(f"quant_memory_runtime failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_memory_archive(request):
+    """GET /v1/quant/memory/archive?kind=news|policy|research|summary&limit= — 档案记忆。
+
+    kind 兼容旧名：report→policy（sector_reports 表）、doc→research（report/*.md 文件）。
+    """
+    try:
+        from laap.paper_trading.memory_api import archive as _mem_archive
+        kind = request.query.get("kind") or "news"
+        limit = request.query.get("limit")
+        try:
+            page = max(1, int(request.query.get("page") or 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = max(1, min(int(request.query.get("page_size") or 15), 100))
+        except (TypeError, ValueError):
+            page_size = 15
+        return web.json_response(_mem_archive(kind, limit=limit, page=page, page_size=page_size))
+    except Exception as e:
+        logger.warning(f"quant_memory_archive failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_memory_archive_create(request):
+    """POST /v1/quant/memory/archive — 档案新增（P3 CRUD）。
+
+    body: {kind: news|policy|research|summary, ...payload}
+    payload 按 kind：policy{sector,content} / research{name?,content} /
+    news{symbol,title,content?,source?} / summary{title,content}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    kind = str(body.get("kind") or "")
+    try:
+        from laap.paper_trading.memory_api import archive_create as _create
+        ok, result, status_code = _create(kind, body)
+        return web.json_response(result, status=status_code)
+    except Exception as e:
+        logger.warning(f"quant_memory_archive_create failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_memory_archive_update(request):
+    """PUT /v1/quant/memory/archive/{kind}/{id} — 档案更新（P3 CRUD）。
+
+    id 语义：policy=report_hash / research=文件名 / news=news id / summary=note id。
+    body: {..payload}（policy{sector?,content} / research{content} /
+          news{title?,content?,source?} / summary{title,content}）
+    """
+    kind = request.match_info.get("kind", "")
+    item_id = request.match_info.get("id", "")
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    try:
+        from laap.paper_trading.memory_api import archive_update as _update
+        ok, result, status_code = _update(kind, item_id, body or {})
+        return web.json_response(result, status=status_code)
+    except Exception as e:
+        logger.warning(f"quant_memory_archive_update failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_memory_archive_delete(request):
+    """DELETE /v1/quant/memory/archive/{kind}/{id} — 档案删除（P3 CRUD）。"""
+    kind = request.match_info.get("kind", "")
+    item_id = request.match_info.get("id", "")
+    try:
+        from laap.paper_trading.memory_api import archive_delete as _delete
+        ok, result, status_code = _delete(kind, item_id)
+        return web.json_response(result, status=status_code)
+    except Exception as e:
+        logger.warning(f"quant_memory_archive_delete failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+# ── 行情研究 · 自选股 CRUD（P3 扩展）──
+
+async def handle_quant_watchlist_get(request):
+    """GET /v1/quant/watchlist — 自选股列表。"""
+    try:
+        from laap.paper_trading.memory_api import watchlist_list
+        return web.json_response(watchlist_list())
+    except Exception as e:
+        logger.warning(f"quant_watchlist_get failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_watchlist_add(request):
+    """POST /v1/quant/watchlist — 加入自选股。body: {symbol, note?}"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    try:
+        from laap.paper_trading.memory_api import watchlist_add
+        ok, result, status_code = watchlist_add(
+            str(body.get("symbol") or ""), str(body.get("note") or ""))
+        return web.json_response(result, status=status_code)
+    except Exception as e:
+        logger.warning(f"quant_watchlist_add failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_watchlist_remove(request):
+    """DELETE /v1/quant/watchlist/{symbol} — 移出自选股。"""
+    symbol = request.match_info.get("symbol", "")
+    try:
+        from laap.paper_trading.memory_api import watchlist_remove
+        ok, result, status_code = watchlist_remove(symbol)
+        return web.json_response(result, status=status_code)
+    except Exception as e:
+        logger.warning(f"quant_watchlist_remove failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+# ── 行情研究 · 政策自选（政策解读 + 关注股票 CRUD）──
+
+async def handle_quant_policy_analyze(request):
+    """POST /v1/quant/policy/analyze — 政策解读（LLM 提取领域/热点/上游，fail-closed）。
+
+    body: {policy_hash: str} → 从 sector_reports 读政策内容 → 解读。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    policy_hash = str(body.get("policy_hash") or "")
+    if not policy_hash:
+        return web.json_response({"error": "policy_hash required"}, status=400)
+    try:
+        from laap.paper_trading.memory_api import policy_analyze
+        result = policy_analyze(policy_hash)
+        if result.get("error"):
+            return web.json_response(result, status=404)
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"quant_policy_analyze failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_policy_upload(request):
+    """POST /v1/quant/policy/upload — 政策文件上传（multipart/form-data）。
+
+    解析 doc/docx/wps/txt/md → 自动创建政策（sector=标题，content=正文）
+    → 自动解读（LLM 提取领域/热点/上游，fail-closed 降级）。
+    Returns: {policy: {id,sector,char_count}, title, content_preview,
+              analysis: {sectors,hotspots,upstream,used_fallback}}
+    """
+    try:
+        reader = await request.multipart()
+    except Exception as e:
+        return web.json_response({"error": f"multipart required: {e}"}, status=400)
+    field = None
+    try:
+        field = await reader.next()
+    except Exception:
+        pass
+    if field is None or getattr(field, "name", None) != "file":
+        return web.json_response({"error": "file field required"}, status=400)
+    filename = str(getattr(field, "filename", "") or "policy.txt")
+    chunks = []
+    try:
+        while True:
+            chunk = await field.read_chunk(64 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except Exception as e:
+        return web.json_response({"error": f"read failed: {e}"}, status=400)
+    raw = b"".join(chunks)
+    if not raw:
+        return web.json_response({"error": "empty file"}, status=400)
+    try:
+        from laap.paper_trading.doc_extract import extract_document
+        from laap.paper_trading.memory_api import archive_create, policy_analyze
+        doc = extract_document(filename, raw)
+        if doc.get("error"):
+            return web.json_response({"error": doc["error"]}, status=400)
+        title = doc.get("title") or "未命名政策"
+        content = doc.get("content") or ""
+        if len(content) < 20:
+            return web.json_response(
+                {"error": "解析出的正文过短（不可解析格式？.doc/.wps 请另存为 .docx/.txt）"},
+                status=400)
+        ok, result, status_code = archive_create(
+            "policy", {"sector": title[:50], "content": content})
+        if not ok:
+            return web.json_response(result, status=status_code)
+        analysis = policy_analyze(result["id"])
+        return web.json_response({
+            "policy": result,
+            "title": title,
+            "content_preview": content[:300],
+            "analysis": analysis,
+            "char_count": len(content),
+        })
+    except Exception as e:
+        logger.warning(f"quant_policy_upload failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_policy_picks_get(request):
+    """GET /v1/quant/policy/picks — 政策自选股列表。"""
+    try:
+        from laap.paper_trading.memory_api import policy_picks_list
+        return web.json_response(policy_picks_list())
+    except Exception as e:
+        logger.warning(f"quant_policy_picks_get failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_policy_picks_match(request):
+    """GET /v1/quant/policy/picks/match?sectors=领域,行业 — 领域词→自选池股票候选（best-effort）。"""
+    try:
+        from laap.paper_trading.memory_api import policy_picks_match
+        sectors = [s for s in (request.query.get("sectors") or "").split(",") if s.strip()]
+        result = policy_picks_match(sectors)
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"quant_policy_picks_match failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_policy_picks_add(request):
+    """POST /v1/quant/policy/picks — 添加政策自选股。
+
+    body: {policy_hash?, sector?, symbol, note?, direction?}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    try:
+        from laap.paper_trading.memory_api import policy_picks_add
+        ok, result, status_code = policy_picks_add(
+            str(body.get("policy_hash") or ""), str(body.get("sector") or ""),
+            str(body.get("symbol") or ""), str(body.get("note") or ""),
+            str(body.get("direction") or ""))
+        return web.json_response(result, status=status_code)
+    except Exception as e:
+        logger.warning(f"quant_policy_picks_add failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_policy_picks_remove(request):
+    """DELETE /v1/quant/policy/picks/{id} — 删除政策自选股。"""
+    pick_id = request.match_info.get("id", "")
+    try:
+        from laap.paper_trading.memory_api import policy_picks_remove
+        ok, result, status_code = policy_picks_remove(pick_id)
+        return web.json_response(result, status=status_code)
+    except Exception as e:
+        logger.warning(f"quant_policy_picks_remove failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+# ── K 线采集（手动 + 定时，数据源 tab 统一管理）──
+
+_kline_last_collect: Dict[str, Any] = {"ts": 0.0, "result": None}
+
+
+def _kline_schedule_path():
+    from laap.config.paths import get_laap_root
+    return get_laap_root() / "state" / "kline_schedule.json"
+
+
+def _load_kline_schedule() -> Dict[str, Any]:
+    import json as _json
+    p = _kline_schedule_path()
+    default = {"enabled": False, "time": "15:35", "last_run": ""}
+    if p.exists():
+        try:
+            d = _json.loads(p.read_text(encoding="utf-8"))
+            return {
+                "enabled": bool(d.get("enabled")),
+                "time": str(d.get("time") or "15:35"),
+                "last_run": str(d.get("last_run") or ""),
+            }
+        except Exception as e:
+            logger.warning(f"kline schedule load failed: {e}")
+    return default
+
+
+def _save_kline_schedule(sched: Dict[str, Any]) -> bool:
+    import json as _json
+    try:
+        p = _kline_schedule_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(_json.dumps(sched, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception as e:
+        logger.warning(f"kline schedule save failed: {e}")
+        return False
+
+
+def _kline_sched_loop():
+    """K 线定时采集循环：enabled 时每日到点 + 交易日触发一次（懒加载线程）。"""
+    while True:
+        try:
+            sched = _load_kline_schedule()
+            if sched.get("enabled"):
+                now = time.localtime()
+                hhmm = f"{now.tm_hour:02d}:{now.tm_min:02d}"
+                today = time.strftime("%Y-%m-%d")
+                if hhmm == sched.get("time") and sched.get("last_run") != today:
+                    from laap.paper_trading.daily_pipeline import QuantDailyScheduler
+                    if QuantDailyScheduler._is_trading_day(source="local"):
+                        from laap.paper_trading.kline_collector import collect_watchlist_kline
+                        result = collect_watchlist_kline()
+                        _kline_last_collect["ts"] = time.time()
+                        _kline_last_collect["result"] = result
+                        sched["last_run"] = today
+                        _save_kline_schedule(sched)
+                        logger.info("kline schedule collect done: %s", result.get("collected"))
+        except Exception as e:
+            logger.warning(f"kline scheduler tick failed: {e}")
+        time.sleep(60)
+
+
+_kline_scheduler_started = False
+
+
+def _start_kline_scheduler():
+    """启动 K 线定时采集线程（幂等，daemon）。"""
+    global _kline_scheduler_started
+    if _kline_scheduler_started:
+        return
+    _kline_scheduler_started = True
+    import threading
+    threading.Thread(target=_kline_sched_loop, daemon=True, name="kline-scheduler").start()
+    logger.info("kline scheduler thread started")
+
+
+async def handle_quant_kline_collect(request):
+    """POST /v1/quant/kline/collect — 手动采集自选池日 K（同步，约 20-60s）。"""
+    try:
+        from laap.paper_trading.kline_collector import collect_watchlist_kline
+        result = collect_watchlist_kline()
+        _kline_last_collect["ts"] = time.time()
+        _kline_last_collect["result"] = result
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"quant_kline_collect failed: {e}")
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+async def handle_quant_kline_status(request):
+    """GET /v1/quant/kline/status — K 线存储统计 + 定时配置 + 最近采集结果。"""
+    try:
+        from laap.paper_trading.kline_collector import kline_stats, kline_latest_day
+        return web.json_response({
+            "stats": kline_stats(),
+            "schedule": _load_kline_schedule(),
+            "latest_day": kline_latest_day(),
+            "last_collect": _kline_last_collect.get("result"),
+            "last_collect_ts": _kline_last_collect.get("ts", 0.0),
+        })
+    except Exception as e:
+        logger.warning(f"quant_kline_status failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_kline_schedule_get(request):
+    """GET /v1/quant/kline/schedule — 读取定时采集配置。"""
+    return web.json_response(_load_kline_schedule())
+
+
+async def handle_quant_kline_schedule_set(request):
+    """POST /v1/quant/kline/schedule — 配置定时采集。body: {enabled?, time?}"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    sched = _load_kline_schedule()
+    if "enabled" in body:
+        sched["enabled"] = bool(body["enabled"])
+    if body.get("time"):
+        sched["time"] = str(body["time"])
+    if not _save_kline_schedule(sched):
+        return web.json_response({"error": "save failed"}, status=500)
+    return web.json_response({"schedule": sched, "message": "定时采集配置已保存"})
+
+
+async def handle_quant_memory_meta(request):
+    """GET /v1/quant/memory/meta — 记忆体（元认识）自报告。"""
+    try:
+        from laap.paper_trading.memory_api import meta as _mem_meta
+        return web.json_response(_mem_meta())
+    except Exception as e:
+        logger.warning(f"quant_memory_meta failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
 async def handle_quant_strategies(request):
     """GET /v1/quant/strategies — 查询所有策略及映射（name/display_name/description/type）。"""
     try:
@@ -1543,6 +2089,133 @@ async def handle_quant_strategies(request):
         })
     except Exception as e:
         logger.warning(f"quant_strategies failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_system_logs(request):
+    """GET /v1/quant/system/logs — 系统日志（L1-L4，发现→上报→处理→总结闭环）。
+
+    查询参数:
+      level   : INFO/WARNING/ERROR/CRITICAL，空=全部
+      category: database/file/datasource/port/llm/auth/general，空=全部
+      limit   : 返回条数（默认 100）
+      offset  : 偏移（默认 0）
+
+    返回:
+      {
+        "logs": [{ts, level, category, root_cause, text, action, auto_handled, note}],
+        "summary": {"total", "by_level": {INFO:N,...}, "by_category": {...}, "last_scan_ts"},
+        "latest_scan": {from orchestrator last_error_result}
+      }
+    """
+    try:
+        from urllib.parse import parse_qs
+        qs = parse_qs(request.query_string)
+        level_filter = (qs.get("level") or [""])[0].upper()
+        cat_filter = (qs.get("category") or [""])[0].lower()
+        try:
+            limit = min(int((qs.get("limit") or ["100"])[0]), 500)
+            offset = max(int((qs.get("offset") or ["0"])[0]), 0)
+        except ValueError:
+            limit, offset = 100, 0
+
+        db = _get_quant_db()
+        logs: List[Dict[str, Any]] = []
+        total = 0
+        by_level: Dict[str, int] = {"INFO": 0, "WARNING": 0, "ERROR": 0, "CRITICAL": 0}
+        by_category: Dict[str, int] = {}
+        if db is not None:
+            try:
+                conn = db.conn()
+                try:
+                    # 幂等建表（PG/SQLite 双后端兼容）
+                    from laap.paper_trading.error_monitor import _events_table as _et
+                    _et(conn)
+                    # ── 查询日志列表 ──
+                    cond_parts = []
+                    params: list = []
+                    if level_filter:
+                        cond_parts.append("priority = ?")
+                        params.append(2 if level_filter == "CRITICAL"
+                                      else (1 if level_filter == "ERROR" else 0))
+                    if cat_filter:
+                        cond_parts.append("category = ?")
+                        params.append(cat_filter)
+                    where = ("WHERE " + " AND ".join(cond_parts)) if cond_parts else ""
+                    cnt = conn.execute(
+                        f"SELECT COUNT(*) FROM error_events {where}", params).fetchone()[0]
+                    total = int(cnt)
+                    rows = conn.execute(
+                        f"SELECT * FROM error_events {where} "
+                        "ORDER BY ts DESC LIMIT ? OFFSET ?",
+                        [*params, limit, offset]).fetchall()
+                    for r in rows:
+                        d = dict(r)
+                        d["ts_iso"] = datetime.fromtimestamp(d["ts"]).strftime("%Y-%m-%d %H:%M:%S")
+                        d["level"] = ("CRITICAL" if d["priority"] == 2 and d.get("root_cause") in
+                                      ("db_write_error", "port_conflict", "auth_failed")
+                                      else "ERROR" if d["priority"] == 2
+                                      else "WARNING" if d["priority"] == 1
+                                      else "INFO")
+                        logs.append({
+                            "ts": d["ts"],
+                            "ts_iso": d["ts_iso"],
+                            "level": d["level"],
+                            "category": d["category"],
+                            "root_cause": d["root_cause"],
+                            "text": d.get("action", "")[:160],
+                            "count": d["count"],
+                            "auto_handled": bool(d["auto_handled"]),
+                            "pushed": bool(d["pushed"]),
+                            "note": d.get("note", ""),
+                        })
+                    # ── 聚合 summary（同连接，避免重复开连）──
+                    for r in conn.execute(
+                            "SELECT priority, COUNT(*) as n FROM error_events GROUP BY priority"
+                    ).fetchall():
+                        p, n = r
+                        label = "ERROR" if p == 2 else "WARNING" if p == 1 else "INFO"
+                        by_level[label] = by_level.get(label, 0) + n
+                    for r in conn.execute(
+                            "SELECT category, COUNT(*) as n FROM error_events GROUP BY category"
+                    ).fetchall():
+                        by_category[r[0]] = r[1]
+                    # total 用 distinct ts（与旧口径一致）
+                    total_distinct = conn.execute(
+                        "SELECT COUNT(DISTINCT ts) FROM error_events").fetchone()[0]
+                    if total == 0:
+                        total = int(total_distinct)
+                finally:
+                    conn.close()
+            except Exception as e:
+                logger.warning(f"system_logs query failed: {e}")
+
+        # 最新巡检快照（来自 orchestrator）
+        latest_scan = None
+        orch = _event_orchestrator
+        if orch is not None and orch.last_error_result:
+            err = orch.last_error_result
+            latest_scan = {
+                "ts": err.get("ts"),
+                "ts_iso": datetime.fromtimestamp(err["ts"]).strftime("%Y-%m-%d %H:%M:%S"),
+                "found": err.get("found", 0),
+                "analyses": err.get("analyses", [])[:10],
+                "disposition": err.get("disposition"),
+                "pushed": err.get("pushed", False),
+            }
+
+        return web.json_response({
+            "logs": logs,
+            "summary": {
+                "total": total,
+                "by_level": by_level,
+                "by_category": by_category,
+                "last_scan_ts": latest_scan["ts"] if latest_scan else None,
+            },
+            "latest_scan": latest_scan,
+        })
+    except Exception as e:
+        logger.warning(f"quant_system_logs failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)
 
 
@@ -1560,6 +2233,76 @@ async def handle_quant_events_status(request):
         return web.json_response(status)
     except Exception as e:
         logger.warning(f"quant_events_status failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_dashboard_init(request):
+    """GET /v1/quant/dashboard/init — 前端首屏聚合快照（G4，15173 信号列表页）。
+
+    一次返回 signals / trades / net_values / strategies / system_status / ws_url，
+    减少前端初始化 N 次请求；实时更新走 WS（/v1/quant/events/ws）。
+    Redis 短缓存（10s）：减小面板切换/刷新触发的重复 DB 读；实时增量由 WS 承担。
+    """
+    try:
+        from laap.cache_backend import cache_get, cache_set
+        cached = cache_get("quant:dashboard:init")
+        if cached is not None:
+            return web.json_response(cached)
+        from laap.paper_trading.strategy_templates import list_strategy_meta
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        conn = db.conn()
+        try:
+            signals = [dict(r) for r in conn.execute(
+                "SELECT * FROM signals ORDER BY ts DESC LIMIT 50").fetchall()]
+            trades = [dict(r) for r in conn.execute(
+                "SELECT * FROM trades ORDER BY entry_ts DESC LIMIT 50").fetchall()]
+            net_values = [dict(r) for r in conn.execute(
+                "SELECT * FROM net_values ORDER BY ts DESC LIMIT 60").fetchall()]
+        finally:
+            conn.close()
+        # WS 地址：与请求同 host（跨端口前端也能直连），协议按请求 scheme 推断
+        scheme = request.headers.get("X-Forwarded-Proto", "http")
+        host = request.host or "127.0.0.1:11546"
+        ws_scheme = "wss" if scheme == "https" else "ws"
+        # 聚合标的名（东财 F10，24h 缓存；查不到不影响快照）
+        # 覆盖：signals ∪ trades ∪ 自选股列表（STOCK_LIST）——实时 tick 榜按自选股推送，
+        # 仅 signals/trades 会缺大部分简称。
+        all_symbols: set = {s["symbol"] for s in signals} | {
+            t["symbol"] for t in trades}
+        try:
+            from laap.paper_trading.daily_pipeline import _get_watchlist_symbols
+            wl = _get_watchlist_symbols() or []
+            all_symbols |= {s for s in wl if s}
+        except Exception as e:  # pragma: no cover - fail-closed
+            logger.debug("watchlist symbols lookup failed: %s", e)
+        stock_names = {}
+        try:
+            from laap.paper_trading.signal_events import fetch_stock_names
+            stock_names = fetch_stock_names(sorted(all_symbols))
+        except Exception as e:  # pragma: no cover - fail-closed
+            logger.debug("stock_names lookup failed: %s", e)
+        payload = {
+            "signals": signals,
+            "trades": trades,
+            "net_values": net_values,
+            "strategies": list_strategy_meta(),
+            "system_status": {
+                "event_driven": _event_orchestrator is not None,
+                "recent_events": list(_recent_events)[-20:],
+                "ws_bridge": (_get_ws_bridge().stats()
+                              if _get_ws_bridge() is not None else None),
+            },
+            "ws_url": f"{ws_scheme}://{host}/v1/quant/events/ws",
+            "stock_names": stock_names,
+            "market_symbols": _market_watch_symbols(),
+            "ts": time.time(),
+        }
+        cache_set("quant:dashboard:init", payload, ttl=10)
+        return web.json_response(payload)
+    except Exception as e:
+        logger.warning(f"quant_dashboard_init failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)
 
 
@@ -1646,10 +2389,51 @@ async def handle_quant_daily_cycle(request):
         loop = _get_paper_loop()
         if loop is None:
             return web.json_response({"error": "paper loop unavailable"}, status=500)
-        result = loop.run_daily_cycle(symbols, params, ohlcv_map=None)
+
+        # 新闻x量价两轨门（2026-08-18 修复：此前 API 路径未传 news_gate，
+        # 新闻判定层形同虚设；现在默认启用，bearish/fake_news 否决 buy，fail-closed）
+        def _news_gate_fn(symbol: str):
+            try:
+                from laap.paper_trading.news_verifier import get_verdicts_for_symbol
+                return get_verdicts_for_symbol(symbol)
+            except Exception as e:
+                logger.warning(f"news_gate failed for {symbol}: {e}")
+                return []
+
+        result = loop.run_daily_cycle(symbols, params, ohlcv_map=None,
+                                      news_gate=_news_gate_fn)
         return web.json_response(result)
     except Exception as e:
         logger.warning(f"quant_daily_cycle failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_system_scan(request):
+    """POST /v1/quant/system/scan — 手动触发一次错误闭环巡检（发现→分析→处理→总结）。
+
+    直接调用 EventOrchestrator._scan_errors()，结果写入 error_events 表并推 WS 事件。
+    返回: {scanned, found, analyses, disposition, persisted}
+    """
+    try:
+        orch = _event_orchestrator
+        if orch is None:
+            return web.json_response(
+                {"error": "event orchestrator not running",
+                 "hint": "set LAAP_EVENT_DRIVEN=1"}, status=503)
+        result = orch._scan_errors()
+        if result is None:
+            return web.json_response({"error": "scan failed"}, status=500)
+        return web.json_response({
+            "scanned": True,
+            "ts": result.get("ts") or time.time(),
+            "found": result.get("found", 0),
+            "analyses": result.get("analyses", [])[:8],
+            "disposition": result.get("disposition", {}),
+            "persisted": result.get("persisted", 0),
+            "summary": result.get("summary", ""),
+        })
+    except Exception as e:
+        logger.warning(f"quant_system_scan failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)
 
 
@@ -2076,6 +2860,586 @@ async def handle_quant_risk_rejections(request):
         return web.json_response({"error": "internal error"}, status=500)
 
 
+async def handle_quant_config(request):
+    """GET /v1/quant/config — 量化可调参数读取（只读，quant_config 单源）。
+
+    返回 quant_config.to_dict()（全部 _DEFAULTS 实时读 env）+ 当前启用策略组合
+    （PAPER_TRADING_STRATEGY 逗号分隔解析）。供前端 M8②参数设置 / M4策略中心
+    读取展示；写入走 POST /v1/quant/apply_params（M4 治理 + 交易自我审核）。
+    """
+    try:
+        from laap.paper_trading import quant_config as qc
+        cfg = qc.to_dict()
+        raw_strategy = str(os.environ.get(
+            "PAPER_TRADING_STRATEGY", cfg.get("PAPER_TRADING_STRATEGY", "multi_factor")))
+        strategy_list = [s.strip() for s in raw_strategy.split(",") if s.strip()]
+        # 数据源列表：逗号分隔源候选（前端展示/编辑用，与 quant_config 语义一致）
+        source_keys = ("MARKET_SOURCES", "KLINE_SOURCES", "NEWS_SOURCES",
+                       "PROFILE_SOURCES", "REPORT_SOURCES", "CALENDAR_SOURCES",
+                       "LLM_SOURCES")
+        sources = {k: [s.strip() for s in str(cfg.get(k, "")).split(",") if s.strip()]
+                   for k in source_keys}
+        # 默认值表（前端「恢复默认」数据源；只读增强，不回填当前值）
+        defaults = {k: v for k, v in qc._DEFAULTS.items()}
+        return web.json_response({
+            "config": cfg,
+            "defaults": defaults,
+            "sources": sources,
+            "strategy": {"raw": raw_strategy, "list": strategy_list},
+            "ts": time.time(),
+        })
+    except Exception as e:
+        logger.warning(f"quant_config failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_params_apply(request):
+    """POST /v1/quant/params/apply — 运行时参数即时生效（P1 支持批次）。
+
+    body: {params: {KEY: value, ...}, rationale?: str}
+    - 白名单：键必须 ∈ quant_config._DEFAULTS（未知键进 rejected，fail-closed）
+    - 类型强制：按默认值类型校验/转换（bool 严格只认 1/true/on → "1"，与既有
+      `os.environ.get()=="1"` 语义一致；数值非法 → rejected，不静默回落默认）
+    - 写入 os.environ → quant_config 惰性读 env → **当前进程立即生效**（不落盘，
+      重启恢复 env/默认值；落码持久化仍走 POST /v1/quant/apply_params 治理）
+    - 广播 system.internal.config.updated → WS 前端重拉 config 刷新（前后端同步）
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    params = body.get("params")
+    if not isinstance(params, dict) or not params:
+        return web.json_response({"error": "params dict required"}, status=400)
+    try:
+        from laap.paper_trading import quant_config as qc
+    except Exception as e:
+        logger.warning(f"quant_config import failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+    applied: Dict[str, Any] = {}
+    rejected: Dict[str, str] = {}
+    for key, raw in params.items():
+        if key not in qc._DEFAULTS:
+            rejected[key] = "unknown key (not in quant_config._DEFAULTS)"
+            continue
+        default = qc._DEFAULTS[key]
+        try:
+            if isinstance(default, bool):
+                # bool 严格 1/true/yes/on → "1"，其余 → "0"（对齐 _coerce 语义）
+                # 直接落 "1"/"0"（不可 str(True)="True"，_coerce 只认 "1"）
+                raw_str = "1" if raw in (True, 1, "1", "true", "True", "yes", "on") else "0"
+                coerced = raw_str == "1"
+                os.environ[key] = raw_str
+                applied[key] = coerced
+                continue
+            elif isinstance(raw, bool):
+                rejected[key] = "bool value for non-bool key"
+                continue
+            elif isinstance(default, (int, float)):
+                try:
+                    float(str(raw))
+                except (TypeError, ValueError):
+                    rejected[key] = "not a number"
+                    continue
+                raw_str = str(raw)
+            elif isinstance(raw, (dict, list, tuple)):
+                rejected[key] = "non-scalar value not supported"
+                continue
+            else:
+                raw_str = str(raw)
+            coerced = qc._coerce(key, raw_str, default)
+            os.environ[key] = str(coerced)
+            applied[key] = coerced
+        except Exception as e:
+            rejected[key] = f"coerce failed: {e}"
+    # 广播：WS 前端收到后重拉 config（system.internal.* 已在 ws_bridge 订阅内）
+    try:
+        from laap.paper_trading.event_bus import EventBus, Event
+        EventBus().publish(Event(
+            "system.internal.config.updated",
+            {"keys": list(applied.keys()), "rejected": rejected, "ts": time.time()},
+            source="api:params_apply"))
+    except Exception as e:
+        logger.debug(f"config.updated broadcast skipped: {e}")
+    return web.json_response({
+        "applied": applied,
+        "rejected": rejected,
+        "count": len(applied),
+        "note": ("runtime apply: 当前进程实时生效（不落盘）；"
+                 "落码持久化走 POST /v1/quant/apply_params"),
+        "ts": time.time(),
+    })
+
+
+async def handle_quant_account(request):
+    """GET /v1/quant/account — 账户资产聚合（现金/持仓/净值/浮盈亏/今日盈亏）。
+
+    供前端 M1 总览工作台 / M7 账户风控 / M8③个人中心读取：
+      - cash: 账本现金（PaperLedger.cash，最新净值恢复）
+      - positions: 未平仓持仓（symbol/quantity/entry_price/current_price/unrealized_pnl）
+      - open_position_value: 持仓成本合计
+      - unrealized_pnl: 持仓实时浮盈亏（Σ qty × (实时价 - entry_price)）
+      - today_pnl: 当日已实现 PnL（今日平仓 trades pnl 之和，含费净额）
+      - latest_net_value / net_values: 净值快照
+    行情 MTM fail-closed：单标的取价失败/降级时该标的浮盈亏按 0 计（不夸大）；
+    不影响现金/已实现等确定性数据。
+    """
+    try:
+        loop = _get_paper_loop()
+        db = _get_quant_db()
+        if loop is None or db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        ledger = getattr(loop, "ledger", None)
+        market = getattr(loop, "market", None)
+        positions = []
+        open_value = 0.0
+        unrealized = 0.0
+        if ledger is not None:
+            try:
+                pos_list = ledger.open_positions()
+                for p in pos_list:
+                    cost = p.quantity * (p.entry_price or 0.0)
+                    open_value += cost
+                    cur = None
+                    pos_unreal = 0.0
+                    if market is not None:
+                        try:
+                            price, meta = market.get_price(p.symbol)
+                            # fail-closed：降级/异常价不算浮盈亏（避免 stub 合成价误导）
+                            if price and price > 0 and not (meta or {}).get("used_fallback"):
+                                cur = round(float(price), 4)
+                                pos_unreal = (cur - (p.entry_price or 0.0)) * p.quantity
+                        except Exception as e:
+                            logger.debug(f"account MTM failed for {p.symbol}: {e}")
+                    unrealized += pos_unreal
+                    positions.append({
+                        "symbol": p.symbol,
+                        "side": p.side.value if hasattr(p.side, "value") else str(p.side),
+                        "quantity": p.quantity,
+                        "entry_price": p.entry_price,
+                        "entry_ts": p.entry_ts,
+                        "current_price": cur,
+                        "unrealized_pnl": round(pos_unreal, 2),
+                    })
+            except Exception as e:
+                logger.debug(f"account positions failed: {e}")
+        conn = db.conn()
+        try:
+            nv_row = conn.execute(
+                "SELECT ts, cash, equity, total FROM net_values "
+                "ORDER BY ts DESC LIMIT 1").fetchone()
+            nv_rows = conn.execute(
+                "SELECT ts, cash, equity, total FROM net_values "
+                "ORDER BY ts ASC LIMIT 500").fetchall()
+            lt = time.localtime()
+            today_start = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday,
+                                       0, 0, 0, 0, 0, -1))
+            today_pnl = 0.0
+            for (pnl,) in conn.execute(
+                    "SELECT pnl FROM trades WHERE exit_ts >= ? AND pnl IS NOT NULL",
+                    (today_start,)).fetchall():
+                today_pnl += float(pnl or 0.0)
+        finally:
+            conn.close()
+        latest_nv = dict(nv_row) if nv_row else None
+        return web.json_response({
+            "cash": round(ledger.cash, 2) if ledger is not None else None,
+            "positions": positions,
+            "open_position_value": round(open_value, 2),
+            "unrealized_pnl": round(unrealized, 2),
+            "latest_net_value": latest_nv,
+            "net_values": [dict(r) for r in nv_rows],
+            "today_pnl": round(today_pnl, 2),
+            "ts": time.time(),
+        })
+    except Exception as e:
+        logger.warning(f"quant_account failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_backtest(request):
+    """POST /v1/quant/backtest — 单标的同步回测（薄封装 BacktestRunner，A股成本口径）。
+
+    body: {strategy: str (模板名，缺省 multi_factor),
+           symbol: str (缺省 600519), days: int (K线天数, 缺省 200),
+           params: dict (可选，覆盖 STRATEGY_PARAMS), costs: dict (可选，显式 {} 零成本)}
+    直接调 BacktestRunner.run_backtest_values（默认 DEFAULT_COSTS 含费），
+    不重实现口径；诚实负结果照实返回。
+
+    Returns: {metrics: {score,cumulative_return,sharpe_ratio,max_drawdown},
+              net_values: [{ts,cash,equity,total}], symbol, strategy, days,
+              quality, count}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    body = body or {}
+    strategy = str(body.get("strategy") or "multi_factor")
+    symbol = str(body.get("symbol") or "600519")
+    days = int(body.get("days") or 200)
+    params = body.get("params")
+    costs = body.get("costs")
+    try:
+        from laap.paper_trading.backtest_runner import BacktestRunner
+        from laap.paper_trading.kline_source import load_ohlcv
+        from laap.paper_trading.strategy import STRATEGY_PARAMS
+
+        ohlcv, quality = load_ohlcv(symbol, days=days, with_quality=True)
+        if not ohlcv:
+            return web.json_response({"error": f"no kline for {symbol}"}, status=400)
+        closes = [float(r[1]) for r in ohlcv]
+        runner = BacktestRunner()
+        p = params if isinstance(params, dict) and params else dict(STRATEGY_PARAMS)
+        # style: multi_factor→trend；模板按名称路由（策略模板已并入 evaluate_signal）
+        style = "trend"
+        metrics, net_values = runner.run_backtest_values(
+            closes, params=p, ohlcv=ohlcv, costs=costs, style=style)
+        nv_list = [dict(nv.to_dict()) for nv in net_values]
+        # 单标的回测结果落库（报告页可查详情，与批量同口径）
+        _store_backtest_run(sym=symbol, strategy=strategy, days=days,
+                            run_type="single", params=p, metrics=metrics,
+                            quality=quality, net_values=nv_list, ts=time.time())
+        return web.json_response({
+            "metrics": metrics,
+            "net_values": nv_list,
+            "symbol": symbol, "strategy": strategy, "days": days,
+            "quality": quality, "count": len(closes),
+            "ts": time.time(),
+        })
+    except Exception as e:
+        logger.warning(f"quant_backtest failed: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+def _run_quant_backtest_once(symbol: str, strategy: str = "multi_factor",
+                             days: int = 200, params: Any = None,
+                             costs: Any = None) -> tuple:
+    """同步跑单标的回测（口径与 /v1/quant/backtest 完全一致：BacktestRunner
+    默认 DEFAULT_COSTS 含费、bar i+1 开盘成交、诚实负结果）。
+
+    Returns: (ok, result) — ok=True → result 成功 payload dict；
+             ok=False → result 为 {error: str, status_code: int}。
+    """
+    try:
+        from laap.paper_trading.backtest_runner import BacktestRunner
+        from laap.paper_trading.kline_source import load_ohlcv
+        from laap.paper_trading.strategy import STRATEGY_PARAMS
+        ohlcv, quality = load_ohlcv(symbol, days=days, with_quality=True)
+        if not ohlcv:
+            return False, {"error": f"no kline for {symbol}", "status_code": 400}
+        closes = [float(r[1]) for r in ohlcv]
+        runner = BacktestRunner()
+        p = params if isinstance(params, dict) and params else dict(STRATEGY_PARAMS)
+        metrics, net_values = runner.run_backtest_values(
+            closes, params=p, ohlcv=ohlcv, costs=costs, style="trend")
+        return True, {
+            "metrics": metrics,
+            "net_values": [dict(nv.to_dict()) for nv in net_values],
+            "symbol": symbol, "strategy": strategy, "days": days,
+            "quality": quality, "count": len(closes),
+        }
+    except Exception as e:
+        logger.warning(f"quant_backtest once failed ({symbol}): {e}")
+        return False, {"error": str(e), "status_code": 500}
+
+
+def _store_backtest_run(sym: str, strategy: str, days: int, run_type: str,
+                        params: Any, metrics: Any, quality: Any,
+                        net_values: Any = None, ts: float = 0.0) -> None:
+    """落 backtest_runs 表（幂等；表缺失/写失败静默跳过，fail-closed）。"""
+    try:
+        import uuid as _uuid
+        import json as _json
+        db = _get_quant_db()
+        if db is None:
+            return
+        conn = db.conn()
+        try:
+            conn.execute(
+                "INSERT INTO backtest_runs (id, ts, symbol, strategy, days, run_type,"
+                " params_json, metrics_json, quality_json, net_values_json)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (_uuid.uuid4().hex, ts or time.time(), sym, strategy, days, run_type,
+                 _json.dumps(params or {}, ensure_ascii=False),
+                 _json.dumps(metrics or {}, ensure_ascii=False),
+                 _json.dumps(quality or {}, ensure_ascii=False),
+                 _json.dumps(net_values or [], ensure_ascii=False)))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.debug(f"backtest run store skipped: {e}")
+
+
+async def handle_quant_backtest_batch(request):
+    """POST /v1/quant/backtest/batch — 批量回测（≤10 标的，同步，同口径，P4）。
+
+    body: {symbols: [str], strategy?, days?, params?, costs?}
+    - 逐标的调 _run_quant_backtest_once（与单标的口径 100% 一致，默认含费）
+    - 单标的失败落 runs[].error，不中断整批；每成功 run 落 backtest_runs 表
+    Returns: {runs: [{symbol, ok, metrics?, net_values_count?, quality?, error?}],
+              aggregate: {total, ok, best_symbol, worst_symbol,
+                          median_cumulative_return, positive_count}, ts}
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    symbols = body.get("symbols")
+    if not isinstance(symbols, list) or not symbols:
+        return web.json_response({"error": "symbols list required"}, status=400)
+    if len(symbols) > 10:
+        return web.json_response({"error": "symbols max 10"}, status=400)
+    strategy = str(body.get("strategy") or "multi_factor")
+    days = int(body.get("days") or 200)
+    params = body.get("params")
+    costs = body.get("costs")
+    ts_now = time.time()
+    runs = []
+    for sym in symbols:
+        s = str(sym).strip()
+        ok, result = _run_quant_backtest_once(s, strategy, days, params, costs)
+        if ok:
+            runs.append({
+                "symbol": result["symbol"], "ok": True,
+                "metrics": result["metrics"],
+                "net_values_count": len(result["net_values"]),
+                "quality": result["quality"],
+            })
+            _store_backtest_run(sym=result["symbol"], strategy=strategy, days=days,
+                                run_type="batch", params=params,
+                                metrics=result["metrics"], quality=result["quality"],
+                                net_values=result["net_values"], ts=ts_now)
+        else:
+            runs.append({"symbol": s, "ok": False, "error": result["error"]})
+    # 聚合（诚实：仅统计 ok 的 run）
+    ok_runs = [r for r in runs if r.get("ok") and r.get("metrics")]
+    agg: Dict[str, Any] = {"total": len(runs), "ok": len(ok_runs),
+                           "best_symbol": "", "worst_symbol": "",
+                           "median_cumulative_return": None, "positive_count": 0}
+    if ok_runs:
+        rets = sorted(ok_runs,
+                      key=lambda r: (r["metrics"].get("cumulative_return") or 0))
+        agg["worst_symbol"] = rets[0]["symbol"]
+        agg["best_symbol"] = rets[-1]["symbol"]
+        agg["positive_count"] = sum(
+            1 for r in ok_runs if (r["metrics"].get("cumulative_return") or 0) > 0)
+        vals = sorted(r["metrics"].get("cumulative_return") or 0 for r in ok_runs)
+        n = len(vals)
+        agg["median_cumulative_return"] = (vals[n // 2] if n % 2
+                                           else (vals[n // 2 - 1] + vals[n // 2]) / 2)
+    return web.json_response({"runs": runs, "aggregate": agg, "ts": ts_now})
+
+
+async def handle_quant_backtest_reports(request):
+    """GET /v1/quant/backtest/reports?page=&page_size= — 回测报告列表（分页，时间倒序）。"""
+    try:
+        import json as _json
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        try:
+            page = max(1, int(request.query.get("page") or 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = max(1, min(int(request.query.get("page_size") or 15), 100))
+        except (TypeError, ValueError):
+            page_size = 15
+        offset = (page - 1) * page_size
+        conn = db.conn()
+        try:
+            total = conn.execute("SELECT COUNT(*) c FROM backtest_runs").fetchone()["c"]
+            rows = conn.execute(
+                "SELECT id, ts, symbol, strategy, days, run_type, metrics_json"
+                " FROM backtest_runs ORDER BY ts DESC LIMIT ? OFFSET ?",
+                (page_size, offset)).fetchall()
+        finally:
+            conn.close()
+        reports = []
+        for r in rows:
+            try:
+                m = _json.loads(r["metrics_json"] or "{}")
+            except Exception:
+                m = {}
+            reports.append({
+                "id": r["id"], "ts": r["ts"], "symbol": r["symbol"],
+                "strategy": r["strategy"], "days": r["days"], "run_type": r["run_type"],
+                "score": m.get("score"), "cumulative_return": m.get("cumulative_return"),
+                "sharpe_ratio": m.get("sharpe_ratio"),
+                "max_drawdown": m.get("max_drawdown"),
+            })
+        return web.json_response({
+            "reports": reports, "count": len(reports),
+            "total": total, "page": page, "page_size": page_size,
+        })
+    except Exception as e:
+        logger.warning(f"quant_backtest_reports failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_backtest_report(request):
+    """GET /v1/quant/backtest/report/{id} — 回测报告详情（含净值序列）。"""
+    rid = request.match_info.get("id", "")
+    if not rid:
+        return web.json_response({"error": "id required"}, status=400)
+    try:
+        import json as _json
+        db = _get_quant_db()
+        if db is None:
+            return web.json_response({"error": "internal error"}, status=500)
+        conn = db.conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM backtest_runs WHERE id=?", (rid,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return web.json_response({"error": f"report {rid} not found"}, status=404)
+
+        def _j(s: str, default: Any):
+            try:
+                return _json.loads(s or "")
+            except Exception:
+                return default
+
+        return web.json_response({
+            "id": row["id"], "ts": row["ts"], "symbol": row["symbol"],
+            "strategy": row["strategy"], "days": row["days"], "run_type": row["run_type"],
+            "params": _j(row["params_json"], {}),
+            "metrics": _j(row["metrics_json"], {}),
+            "quality": _j(row["quality_json"], {}),
+            "net_values": _j(row["net_values_json"], []),
+        })
+    except Exception as e:
+        logger.warning(f"quant_backtest_report failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+# ── P5 实盘下盘（占位）：不实现真实券商路由，fail-closed 诚实标记 ──
+_LIVE_BROKERS = [
+    {"id": "simnow", "name": "上期 SIMNOW"},
+    {"id": "qmt", "name": "迅投 QMT"},
+    {"id": "ths", "name": "同花顺"},
+    {"id": "custom", "name": "自定义/其他券商"},
+]
+
+
+async def handle_quant_live_status(request):
+    """GET /v1/quant/live/status — 实盘通道状态（占位：恒未接入）。
+
+    占位契约：live_enabled 恒 false，直到真实实现上线；前端看到 false
+    才能展示「未接入」灰态，严禁前端假装可交易。
+    """
+    try:
+        return web.json_response({
+            "mode": "placeholder",
+            "live_enabled": False,
+            "paper_mode_active": True,
+            "brokers": [
+                {"id": b["id"], "name": b["name"], "connected": False,
+                 "note": "未接入（占位）"}
+                for b in _LIVE_BROKERS
+            ],
+            "ts": time.time(),
+        })
+    except Exception as e:
+        logger.warning(f"quant_live_status failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_live_connect(request):
+    """POST /v1/quant/live/broker/connect — 券商对接（占位：恒 501）。
+
+    body: {broker_id: str}。不建连接、不落库、不引入券商 SDK；
+    恒返回 501 not_implemented（fail-closed：未实现就如实说未实现）。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    broker_id = str((body or {}).get("broker_id") or "")
+    known = any(b["id"] == broker_id for b in _LIVE_BROKERS)
+    return web.json_response({
+        "status": "not_implemented",
+        "message": ("实盘对接占位：本批次不实现真实券商路由（fail-closed）。"
+                    "当前所有订单仍走 paper trading。"),
+        "broker_id": broker_id,
+        "broker_known": known,
+        "connected": False,
+    }, status=501)
+
+
+async def handle_quant_decide(request):
+    """POST /v1/quant/decide — 交易决策建议（审核，不下单）。
+
+    body: {symbol, action: buy|sell, qty?: int, rationale?: str}
+    薄封装 quant_bridge.use_decide（记忆注入 + TradingSelf.judge 审核），
+    fail-closed：只返回建议（executed=False），不产生订单。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    symbol = str(body.get("symbol") or "").strip()
+    action = str(body.get("action") or "").strip()
+    if not symbol or action not in ("buy", "sell"):
+        return web.json_response({"error": "symbol + action(buy|sell) required"},
+                                 status=400)
+    try:
+        from laap.paper_trading.quant_bridge import get_bridge
+        result = get_bridge().use_decide(
+            symbol=symbol, action=action,
+            qty=int(body.get("qty") or 0),
+            rationale=str(body.get("rationale") or ""))
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"quant_decide failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
+async def handle_quant_order(request):
+    """POST /v1/quant/order — 手动下单（薄封装 quant_bridge.use_execute，fail-closed）。
+
+    body: {symbol, action: buy|sell, qty: int, confirm_word: str,
+           decision_id?: str, rationale?: str}
+    安全语义全部保留（不绕过）：
+      交易日门 → 确认词门（PAPER_TRADING_AUTO_EXECUTE=0 时强制二次确认）
+      → 行情降级拒绝（used_fallback → market_fallback）→ TradingSelf.judge
+      审核（非 approve → judge_blocked）→ issue 执行。
+    Returns: {executed, status, ...}（后端原样透传 use_execute 结果）。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    body = body or {}
+    symbol = str(body.get("symbol") or "").strip()
+    action = str(body.get("action") or "").strip()
+    qty = body.get("qty")
+    if not symbol or action not in ("buy", "sell"):
+        return web.json_response({"error": "symbol + action(buy|sell) required"},
+                                 status=400)
+    try:
+        qty = int(qty)
+    except (TypeError, ValueError):
+        return web.json_response({"error": f"qty invalid: {qty!r}"}, status=400)
+    try:
+        from laap.paper_trading.quant_bridge import get_bridge
+        result = get_bridge().use_execute(
+            decision_id=str(body.get("decision_id") or ""),
+            symbol=symbol, action=action, qty=qty,
+            confirm_word=str(body.get("confirm_word") or ""))
+        return web.json_response(result)
+    except Exception as e:
+        logger.warning(f"quant_order failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+
 async def handle_root(request):
     return web.json_response({
         "name": "LAAP Brain API",
@@ -2108,6 +3472,7 @@ async def handle_root(request):
             "/v1/quant/self/status": "TradingSelf status",
             "/v1/quant/daily_cycle": "Run daily paper cycle",
             "/v1/quant/apply_params": "Apply evolved params to code (governed)",
+            "/v1/quant/params/apply": "Runtime-apply params (env live, no code rewrite)",
             "/v1/quant/evolve": "Run code-level evolution proposal",
             "/v1/quant/evolve_params": "Parameter evolution (optionally LLM-refined)",
             "/v1/quant/evolve/approve": "Approve evolution proposal",
@@ -2127,6 +3492,46 @@ async def handle_root(request):
 # ── 启动 ─────────────────────────────────────────────────────
 
 
+def _cors_origin_allowed(origin: str) -> bool:
+    """是否放行该跨域来源。
+
+    默认仅本机（localhost / 127.0.0.1 任意端口，覆盖隐藏前端 15173）；
+    可用 env LAAP_CORS_ORIGINS（逗号分隔精确列表）覆盖。
+    """
+    if not origin:
+        return False
+    env = os.environ.get("LAAP_CORS_ORIGINS", "").strip()
+    if env:
+        return origin in [o.strip() for o in env.split(",") if o.strip()]
+    from urllib.parse import urlparse
+    return (urlparse(origin).hostname or "") in ("localhost", "127.0.0.1")
+
+
+@web.middleware
+async def cors_middleware(request, handler):
+    """跨域支持（隐藏前端 15173 → 后端 11546，2026-08-19）。
+
+    前端带 `Authorization` 头请求快照 → 浏览器先发 OPTIONS 预检（非简单请求）。
+    预检直接 200 + CORS 头返回（不经 auth_middleware，预检不带凭证）；
+    普通请求在响应上附加 CORS 头。仅放行本机来源（默认），不开放任意站点。
+    """
+    origin = request.headers.get("Origin", "")
+    allow = _cors_origin_allowed(origin)
+    if request.method == "OPTIONS":
+        resp = web.Response(status=200)
+    else:
+        resp = await handler(request)
+    if allow:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Vary"] = "Origin"
+        resp.headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, X-Requested-With")
+        resp.headers["Access-Control-Allow-Methods"] = (
+            "GET, POST, PUT, DELETE, OPTIONS")
+        resp.headers["Access-Control-Max-Age"] = "3600"
+    return resp
+
+
 @web.middleware
 async def auth_middleware(request, handler):
     """可选 API Key 校验 (R7).
@@ -2138,7 +3543,15 @@ async def auth_middleware(request, handler):
     if not key:
         return await handler(request)
     # / 和 /health 免鉴权；WS 端点走自定义鉴权（upgrade 前无法发 header）
-    if request.path in ("/", "/health", "/v1/quant/events/ws"):
+    if request.path in ("/", "/health", "/v1/quant/events/ws",
+                        "/v1/quant/dashboard/init",
+                        "/v1/quant/config", "/v1/quant/account",
+                        "/v1/quant/memory/status",
+                        "/v1/quant/memory/runtime",
+                        "/v1/quant/memory/meta",
+                        "/v1/quant/live/status",
+                        "/v1/quant/system/logs",
+                        "/v1/quant/system/scan"):
         return await handler(request)
     auth = request.headers.get("Authorization", "")
     if auth == f"Bearer {key}":
@@ -2148,7 +3561,7 @@ async def auth_middleware(request, handler):
 
 def create_app() -> web.Application:
     """创建 LAAP Brain API 应用。"""
-    app = web.Application(middlewares=[auth_middleware])
+    app = web.Application(middlewares=[cors_middleware, auth_middleware])
     app.router.add_get("/", handle_root)
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/models", handle_models)
@@ -2173,8 +3586,33 @@ def create_app() -> web.Application:
     app.router.add_post("/v1/quant/decisions", handle_quant_decision_record)
     app.router.add_get("/v1/quant/lessons", handle_quant_lessons)
     app.router.add_get("/v1/quant/self/status", handle_quant_self_status)
+    app.router.add_get("/v1/quant/personality", handle_quant_personality_get)
+    app.router.add_post("/v1/quant/personality", handle_quant_personality_set)
+    app.router.add_get("/v1/quant/memory/status", handle_quant_memory_status)
+    app.router.add_get("/v1/quant/memory/runtime", handle_quant_memory_runtime)
+    app.router.add_get("/v1/quant/memory/archive", handle_quant_memory_archive)
+    app.router.add_post("/v1/quant/memory/archive", handle_quant_memory_archive_create)
+    app.router.add_put("/v1/quant/memory/archive/{kind}/{id}", handle_quant_memory_archive_update)
+    app.router.add_delete("/v1/quant/memory/archive/{kind}/{id}", handle_quant_memory_archive_delete)
+    app.router.add_get("/v1/quant/watchlist", handle_quant_watchlist_get)
+    app.router.add_post("/v1/quant/watchlist", handle_quant_watchlist_add)
+    app.router.add_delete("/v1/quant/watchlist/{symbol}", handle_quant_watchlist_remove)
+    app.router.add_post("/v1/quant/policy/analyze", handle_quant_policy_analyze)
+    app.router.add_post("/v1/quant/policy/upload", handle_quant_policy_upload)
+    app.router.add_get("/v1/quant/policy/picks", handle_quant_policy_picks_get)
+    app.router.add_get("/v1/quant/policy/picks/match", handle_quant_policy_picks_match)
+    app.router.add_post("/v1/quant/policy/picks", handle_quant_policy_picks_add)
+    app.router.add_delete("/v1/quant/policy/picks/{id}", handle_quant_policy_picks_remove)
+    app.router.add_post("/v1/quant/kline/collect", handle_quant_kline_collect)
+    app.router.add_get("/v1/quant/kline/status", handle_quant_kline_status)
+    app.router.add_get("/v1/quant/kline/schedule", handle_quant_kline_schedule_get)
+    app.router.add_post("/v1/quant/kline/schedule", handle_quant_kline_schedule_set)
+    app.router.add_get("/v1/quant/memory/meta", handle_quant_memory_meta)
     app.router.add_get("/v1/quant/strategies", handle_quant_strategies)
     app.router.add_get("/v1/quant/events/status", handle_quant_events_status)
+    app.router.add_get("/v1/quant/system/logs", handle_quant_system_logs)
+    app.router.add_post("/v1/quant/system/scan", handle_quant_system_scan)
+    app.router.add_get("/v1/quant/dashboard/init", handle_quant_dashboard_init)
     app.router.add_get("/v1/quant/events/ws", handle_quant_events_ws)
     app.router.add_post("/v1/quant/daily_cycle", handle_quant_daily_cycle)
     app.router.add_post("/v1/quant/apply_params", handle_quant_apply_params)
@@ -2197,6 +3635,17 @@ def create_app() -> web.Application:
     app.router.add_post("/v1/quant/news/verify", handle_quant_news_verify)
     app.router.add_post("/v1/quant/news/scan", handle_quant_news_scan)
     app.router.add_get("/v1/quant/risk/rejections", handle_quant_risk_rejections)
+    app.router.add_get("/v1/quant/config", handle_quant_config)
+    app.router.add_get("/v1/quant/account", handle_quant_account)
+    app.router.add_post("/v1/quant/params/apply", handle_quant_params_apply)
+    app.router.add_post("/v1/quant/backtest", handle_quant_backtest)
+    app.router.add_post("/v1/quant/backtest/batch", handle_quant_backtest_batch)
+    app.router.add_get("/v1/quant/backtest/reports", handle_quant_backtest_reports)
+    app.router.add_get("/v1/quant/backtest/report/{id}", handle_quant_backtest_report)
+    app.router.add_get("/v1/quant/live/status", handle_quant_live_status)
+    app.router.add_post("/v1/quant/live/broker/connect", handle_quant_live_connect)
+    app.router.add_post("/v1/quant/decide", handle_quant_decide)
+    app.router.add_post("/v1/quant/order", handle_quant_order)
     return app
 
 
@@ -2244,6 +3693,8 @@ def main():
     _start_quant_daily_scheduler()
     # 新闻盘中轮询 (LAAP_NEWS_INTRADAY=1 时)
     _start_news_worker()
+    # K 线定时采集线程（enabled 时每日到点采集，数据源 tab 管理）
+    _start_kline_scheduler()
     # 事件驱动编排器 (LAAP_EVENT_DRIVEN=1 时, 2026-08-17)
     _start_event_orchestrator()
 

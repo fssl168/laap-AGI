@@ -280,3 +280,77 @@ class TestIntegration:
             import os
             if os.path.exists(tmp):
                 os.remove(tmp)
+
+
+class TestGetVerdictsForSymbol:
+    """get_verdicts_for_symbol：news_gate 的 DB 输入源（2026-08-18 补）。
+
+    回归保护：daily_pipeline/api 的 _news_gate_fn 依赖此函数；此前缺失导致
+    news_gate 永远拿到空列表（ImportError 被吞），新闻门形同虚设。
+    """
+
+    def test_returns_verdicts_for_symbol(self, tmp_path, monkeypatch):
+        from laap.paper_trading.db import PaperDB
+        import laap.paper_trading.news_verifier as nv
+        import time as _t
+
+        db = PaperDB(db_path=str(tmp_path / "test_gate.db"))
+        conn = db.conn()
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS news_verdicts (
+                news_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                verdict TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.0,
+                reasons_json TEXT DEFAULT '[]',
+                impact TEXT DEFAULT '',
+                rsi REAL,
+                trade_action TEXT DEFAULT '',
+                dispatched INTEGER NOT NULL DEFAULT 0,
+                decision_id TEXT DEFAULT '',
+                used_fallback INTEGER NOT NULL DEFAULT 0,
+                ts REAL NOT NULL,
+                PRIMARY KEY (news_id, ts)
+            );
+        """)
+        now = _t.time()
+        conn.execute(
+            "INSERT INTO news_verdicts (news_id, symbol, verdict, confidence,"
+            " reasons_json, ts) VALUES (?,?,?,?,?,?)",
+            ("n1", "000410", "bearish", 0.95, '[\"亏损\"]', now))
+        conn.execute(
+            "INSERT INTO news_verdicts (news_id, symbol, verdict, confidence,"
+            " reasons_json, ts) VALUES (?,?,?,?,?,?)",
+            ("n2", "000410.SZ", "genuine_bullish", 0.9, '[\"补助\"]', now))
+        conn.execute(
+            "INSERT INTO news_verdicts (news_id, symbol, verdict, confidence,"
+            " reasons_json, ts) VALUES (?,?,?,?,?,?)",
+            ("n3", "600519", "neutral", 0.5, '[]', now))
+        conn.commit()
+        conn.close()
+
+        # 000410 应匹配 000410 + 000410.SZ（不含 600519）
+        verdicts = nv.get_verdicts_for_symbol("000410", db=db)
+        symbols = {v.news_id for v in verdicts}
+        assert "n1" in symbols and "n2" in symbols
+        assert "n3" not in symbols
+
+        # 反向：传 000410.SZ 同样匹配
+        verdicts2 = nv.get_verdicts_for_symbol("000410.SZ", db=db)
+        assert {v.news_id for v in verdicts2} == {"n1", "n2"}
+
+        # news_gate 集成：bearish 存在 → 否决 buy
+        from laap.paper_trading.news_gate import apply_news_gate, GATE_VETOED
+        action, _reason, gate = apply_news_gate("buy", verdicts)
+        assert action == "hold" and gate == GATE_VETOED
+
+    def test_db_failure_returns_empty(self, monkeypatch):
+        """查询失败 → []（fail-closed：不因新闻源故障瘫痪量价）。"""
+        import laap.paper_trading.news_verifier as nv
+
+        class _BadDB:
+            def conn(self):
+                raise RuntimeError("db down")
+
+        verdicts = nv.get_verdicts_for_symbol("000410", db=_BadDB())
+        assert verdicts == []
