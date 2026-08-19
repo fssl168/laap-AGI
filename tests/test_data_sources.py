@@ -14,6 +14,8 @@ def test_source_chain_default(monkeypatch):
               "LLM_SOURCES"):
         monkeypatch.delenv(k, raising=False)
     assert source_chain("PROFILE") == ["individual_info", "em_profile", "cninfo"]
+    # 2026-08-17 起 akshare 的 stock_bid_ask_em 被东财 WAF 拒，tx 为主源（契约单源:
+    # quant_config.MARKET_SOURCES 默认值，测试对齐当前可执行代码）
     assert source_chain("MARKET") == ["tx", "em", "tickplus", "xq", "akshare", "stub"]
     assert source_chain("KLINE") == ["db", "tushare", "tencent", "akshare",
                                      "synthetic"]
@@ -35,6 +37,8 @@ def test_source_chain_runtime_adjustable(monkeypatch):
 
 
 def test_resolve_first_first_success(monkeypatch):
+    # 显式固定源链，避免 .env MARKET_SOURCES 覆盖导致顺序漂移
+    monkeypatch.setenv("MARKET_SOURCES", "akshare,stub")
     calls = []
 
     def a():
@@ -44,14 +48,13 @@ def test_resolve_first_first_success(monkeypatch):
     def b():
         calls.append("b")
         return "B"
-    # 固定链，避免 .env 的 MARKET_SOURCES 覆盖（tx,em,xq,stub 无 akshare）
-    monkeypatch.setenv("MARKET_SOURCES", "akshare,stub")
     result, source = resolve_first("MARKET", {"akshare": a, "stub": b})
     assert (result, source) == ("A", "akshare")
     assert calls == ["a"]  # 只用第一个成功源
 
 
 def test_resolve_first_fallback(monkeypatch):
+    monkeypatch.setenv("MARKET_SOURCES", "akshare,stub")
     calls = []
 
     def a():
@@ -61,13 +64,14 @@ def test_resolve_first_fallback(monkeypatch):
     def b():
         calls.append("b")
         return "B"
-    monkeypatch.setenv("MARKET_SOURCES", "akshare,stub")
     result, source = resolve_first("MARKET", {"akshare": a, "stub": b})
     assert (result, source) == ("B", "stub")
     assert calls == ["a", "b"]  # 第一个失败 → 回退第二个
 
 
-def test_resolve_first_all_fail_raises():
+def test_resolve_first_all_fail_raises(monkeypatch):
+    monkeypatch.setenv("MARKET_SOURCES", "akshare,stub")
+
     def a():
         raise RuntimeError("a fail")
 

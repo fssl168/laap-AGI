@@ -120,24 +120,15 @@ def _stub_ak(monkeypatch):
     monkeypatch.setenv("NEWS_SOURCES", "eastmoney")
     monkeypatch.setenv("PROFILE_SOURCES", "individual_info,cninfo")
     monkeypatch.setenv("REPORT_SOURCES", "eastmoney")
-    # NAS 更新后 eastmoney 源改为 em_sources/em_reports 直连优先（绕 akshare）——
-    # 测试必须同时 stub 直连函数返回空，强制回退到 akshare stub（2026-08-18）
-    import laap.paper_trading.em_sources as em_sources_mod
-    import laap.paper_trading.em_reports as em_reports_mod
-    monkeypatch.setattr(em_sources_mod, "fetch_news_direct", lambda *a, **k: [])
-    monkeypatch.setattr(em_sources_mod, "fetch_profile_direct", lambda *a, **k: None)
-    # 研报直连 stub：返回与测试断言匹配的 mock 记录（NAS 更新后生产不再走 akshare 研报）
-    monkeypatch.setattr(em_reports_mod, "fetch_reports_direct",
-                        lambda *a, **k: [
-                            {"title": "茅台目标价上调", "rating": "买入",
-                             "org": "中信证券", "target_price": 1800.0,
-                             "eps": 55.0, "pe": 30.0,
-                             "date": "2026-08-10", "url": "http://r/1"},
-                            {"title": "短期承压", "rating": "增持",
-                             "org": "国泰君安", "target_price": 1650.0,
-                             "eps": 52.0, "pe": 28.0,
-                             "date": "2026-08-12", "url": "http://r/2"},
-                        ][:k.get("max_results", 2)])
+    # 2026-08-18: news_intel 的 eastmoney 源已改为 em_sources/em_reports 直连优先。
+    # 测试隔离：直连模块 fail-closed（返回空），强制走 akshare stub 路径，
+    # 保证沙箱内离线确定性（不连真实东财网络）。
+    monkeypatch.setattr("laap.paper_trading.em_sources.fetch_news_direct",
+                        lambda *a, **k: [])
+    monkeypatch.setattr("laap.paper_trading.em_sources.fetch_profile_direct",
+                        lambda *a, **k: None)
+    monkeypatch.setattr("laap.paper_trading.em_reports.fetch_reports_direct",
+                        lambda *a, **k: [])
     yield ak
     _inject_ak(None)
     _CACHE.clear()
@@ -200,7 +191,18 @@ def test_fetch_stock_profile_all_fail(_stub_ak):
     assert meta["used_fallback"] is True
 
 
-def test_fetch_research_reports():
+def test_fetch_research_reports(monkeypatch):
+    # 2026-08-18: 东财研报已改为 em_reports.fetch_reports_direct 直连（akshare 路径移除）
+    monkeypatch.setattr(
+        "laap.paper_trading.em_reports.fetch_reports_direct",
+        lambda symbol, **kw: [
+            {"symbol": symbol, "title": "茅台目标价上调", "rating": "买入",
+             "org": "中信证券", "target_price": 1800.0, "eps": 55.0, "pe": 30.0,
+             "date": "2026-08-10", "url": "http://r/1", "source": "eastmoney"},
+            {"symbol": symbol, "title": "短期承压", "rating": "增持",
+             "org": "国泰君安", "target_price": 1650.0, "eps": 52.0, "pe": 28.0,
+             "date": "2026-08-12", "url": "http://r/2", "source": "eastmoney"},
+        ])
     reps, meta = fetch_research_reports("600519", max_results=2)
     assert len(reps) == 2
     assert reps[0].rating == "买入"
@@ -210,11 +212,8 @@ def test_fetch_research_reports():
     assert meta["used_fallback"] is False
 
 
-def test_fetch_research_reports_fail(_stub_ak, monkeypatch):
-    # NAS 更新后研报走 em_reports 直连：stub 抛异常 → 全链失败 → 空+fallback
-    import laap.paper_trading.em_reports as em_reports_mod
-    monkeypatch.setattr(em_reports_mod, "fetch_reports_direct",
-                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("net fail")))
+def test_fetch_research_reports_fail(_stub_ak):
+    # 直连研报源失败（fixture 已 stub fetch_reports_direct → []，NoDataError → 空+fallback）
     reps, meta = fetch_research_reports("600519")
     assert reps == []
     assert meta["used_fallback"] is True
@@ -557,15 +556,20 @@ def test_normalize_symbol():
 
 
 def test_fetch_reports_normalizes_suffixed_symbol(_stub_ak, monkeypatch):
-    """'600114.SH' → 东财直连接口收到裸 '600114'，返回模型 symbol 为裸代码。"""
-    import laap.paper_trading.em_reports as em_reports_mod
+    """'600114.SH' → 东财接口收到裸 '600114'，返回模型 symbol 为裸代码。"""
+    # 2026-08-18: 研报已走 em_reports.fetch_reports_direct 直连（akshare 路径移除）
     seen = {}
-    orig = em_reports_mod.fetch_reports_direct
+    monkeypatch.setattr(
+        "laap.paper_trading.em_reports.fetch_reports_direct",
+        lambda symbol, **kw: [{"symbol": symbol, "title": "t", "rating": "买入"}])
+    # 包一层记录入参（fixture 的默认 stub 会被本测试的 setattr 覆盖）
+    from laap.paper_trading import em_reports
+    orig = em_reports.fetch_reports_direct
 
     def _wrap(symbol, **kw):
         seen["symbol"] = symbol
         return orig(symbol, **kw)
-    monkeypatch.setattr(em_reports_mod, "fetch_reports_direct", _wrap)
+    monkeypatch.setattr(em_reports, "fetch_reports_direct", _wrap)
     reports, meta = fetch_research_reports("600114.SH", max_results=5)
     assert seen["symbol"] == "600114"
     assert meta["used_fallback"] is False

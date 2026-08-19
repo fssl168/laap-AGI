@@ -104,7 +104,9 @@ class _FileDB:
     def __init__(self, path):
         self._path = path
         c = sqlite3.connect(str(path))
-        c.execute("CREATE TABLE IF NOT EXISTS trades (id TEXT PRIMARY KEY, symbol TEXT)")
+        # entry_ts 与真实 schema（db.py）对齐：compute_loss_streak 按 entry_ts 排序
+        c.execute("CREATE TABLE IF NOT EXISTS trades ("
+                  "id TEXT PRIMARY KEY, symbol TEXT, entry_ts REAL)")
         c.execute("CREATE TABLE IF NOT EXISTS outcomes ("
                   "trade_id TEXT PRIMARY KEY, pnl_pct REAL)")
         c.commit()
@@ -144,7 +146,8 @@ def test_compute_loss_streak(tmp_path):
     c.execute("INSERT INTO outcomes (trade_id, pnl_pct) VALUES ('t5', -0.03)")
     c.commit()
     c.close()
-    # 按 rowid 倒序最新在前：t4(盈) → streak=0
+    # 无 entry_ts → 按 entry_ts 排序（全 NULL）后以 trade_id DESC 兜底：t4 最新在前
+    # 连亏 2 笔后盈利 1 笔 → streak=0
     assert compute_loss_streak(db, "600519") == 0
     # 000001 最新一笔亏损 → streak=1
     assert compute_loss_streak(db, "000001") == 1

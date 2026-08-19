@@ -243,6 +243,9 @@ def test_restrict_resources_default_true():
     assert t.restrict_resources is True
 
 
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root 绕过文件权限位，chmod 0o444 不阻止写入（CI/沙箱以 root 运行时跳过）")
 def test_sandbox_files_made_readonly(monkeypatch, tmp_path):
     """restrict_resources=True 时 test_mutation 后沙箱文件应只读。"""
     from laap.agi.code_evolution import MutationStatus

@@ -62,7 +62,7 @@ def test_clamp_params_truncates_and_int():
     out = clamp_params({
         "fast_ma": 999,        # int [2,15] → 15
         "slow_ma": 3,          # int [10,60] → 10
-        "position_scale": 5.0,  # float [0.02,0.10] → 0.10（2026-08-18 上限收紧对齐 R2）
+        "position_scale": 5.0,  # float [0.02,0.10] → 0.10（R2 风控红线收敛，2026-08-17）
         "rsi_period": 1.5,      # int [5,30] → 5
     })
     assert out["fast_ma"] == 15.0 and float(out["fast_ma"]).is_integer()

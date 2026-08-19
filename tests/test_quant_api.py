@@ -1125,8 +1125,8 @@ def test_policy_picks_match_industry(monkeypatch):
     assert d["pool_size"] == 4
 
 
-def test_policy_picks_match_llm_topup(monkeypatch):
-    """候选生成：关键词命中 <5 → LLM 池内补足到 ≥5。"""
+def test_policy_picks_match_memory_backfill(monkeypatch):
+    """候选生成：算法命中<5 → 记忆链历史政策候选补齐到 ≥5（LLM 默认不补足）。"""
     from laap.paper_trading.memory_api import policy_picks_match
     _memory_db(monkeypatch)
     monkeypatch.setattr(
@@ -1138,13 +1138,33 @@ def test_policy_picks_match_llm_topup(monkeypatch):
                  "601899": {"name": "紫金矿业", "industry": "有色金属"},
                  "600036": {"name": "招商银行", "industry": "银行"},
                  "000001": {"name": "平安银行", "industry": "银行"}})
-
-    def _fake_llm(kws, pool_lines, want):
-        return ["300750", "600905", "601899", "600036"]
-
-    monkeypatch.setattr("laap.paper_trading.memory_api._llm_pick", _fake_llm)
+    class FakeMem:
+        """假记忆链：query(白酒) 召回历史政策候选（方向相关性），其余为空。"""
+        def query(self, q, max_results=10):
+            if "白酒" in str(q):
+                return [
+                    {"type": "episodic", "content": "政策候选 300750 宁德时代 方向:电池 关注:白酒",
+                     "strength": 1.0, "emotional_valence": 0.3},
+                    {"type": "episodic", "content": "政策候选 600905 三峡能源 方向:电力 关注:白酒",
+                     "strength": 0.9, "emotional_valence": 0.3},
+                    {"type": "episodic", "content": "政策候选 601899 紫金矿业 方向:有色金属 关注:白酒",
+                     "strength": 0.8, "emotional_valence": 0.3},
+                    {"type": "episodic", "content": "政策候选 600036 招商银行 方向:银行 关注:白酒",
+                     "strength": 0.7, "emotional_valence": 0.3},
+                ]
+            return []
+        def encode_experience(self, *a, **k): return {}
+        def save(self): return True
+    monkeypatch.setattr("laap.paper_trading.memory_api._get_unified_memory", lambda: FakeMem())
+    called = {"llm": False}
+    def boom(*a, **k):
+        called["llm"] = True
+        raise RuntimeError("LLM 不应被调用（候选 LLM 未配置）")
+    monkeypatch.setattr("laap.paper_trading.memory_api._llm_pick", boom)
     d = policy_picks_match(["白酒"], limit=8)
     syms = [c["symbol"] for c in d["candidates"]]
-    assert "600519" in syms
-    assert len(syms) >= 5
-    assert any(c["via"] == "llm" for c in d["candidates"])
+    assert "600519" in syms                 # 算法命中
+    assert "300750" in syms                 # 记忆链历史候选补齐
+    assert len(syms) >= 5                   # 补齐到 ≥5
+    assert any(c["via"] == "memory" for c in d["candidates"])
+    assert not called["llm"]               # 未配置候选 LLM → 不调用 LLM

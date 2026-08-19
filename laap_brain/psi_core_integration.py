@@ -31,12 +31,31 @@ import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from laap_brain.config import STATE_DIR, BRAIN_DIR
+from laap_brain.config import STATE_DIR, BRAIN_DIR, LAAP_ROOT
 
 logger = logging.getLogger("laap.psi_core")
 
 # 编译的 Rust 二进制文件路径
 PSI_CORE_BINARY = BRAIN_DIR / "psi_jspace_bridge" / "aris_psi_core.exe"
+
+# Windows 专属的 CREATE_NO_WINDOW（避免弹出控制台窗口）；非 Windows 平台不存在该
+# 常量，直接传 0（无 flag）。2026-08-18: 此前无条件引用导致 Linux/NAS 启动 PSI 崩溃。
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _venv_python() -> str:
+    """解析 LAAP venv python（PSI 子进程解释器，与父进程同环境）。
+
+    2026-08-16: 不用 sys.executable——nssm 服务(LocalSystem)环境下 venv python 的
+    sys.executable 解析成 uv 裸 python，导致 PSI 子进程用错解释器。改为解析
+    LAAP_ROOT/.venv 下的解释器（跨平台：win32 用 Scripts/python.exe，其余 bin/python）。
+    2026-08-18: 去掉硬编码 Windows 路径 D:\\laap-AGI\\... （契约单源，随 LAAP_ROOT 走）。
+    """
+    if sys.platform == "win32":
+        cand = LAAP_ROOT / ".venv" / "Scripts" / "python.exe"
+    else:
+        cand = LAAP_ROOT / ".venv" / "bin" / "python"
+    return str(cand) if cand.exists() else sys.executable
 
 
 class PsiCoreLauncher:
@@ -78,7 +97,7 @@ class PsiCoreLauncher:
                 [str(self.binary), str(self.state_dir)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                creationflags=_CREATE_NO_WINDOW,
             )
             self._mode = self.MODE_RUST
             self._running = True
@@ -105,16 +124,15 @@ class PsiCoreLauncher:
     def _start_python_subprocess(self) -> bool:
         """启动 Python PSI Core 作为独立子进程（与 Rust 模式一致）。"""
         try:
-            # 2026-08-16: 不用 sys.executable——nssm 服务(LocalSystem)环境下
-            # venv python 的 sys.executable 解析成 uv 裸 python (pyvenv.cfg home 指向
-            # uv), 导致 PSI 子进程用错解释器 (实测: venv 父进程 fork 出 uv 子进程监听
-            # 11546, 统一环境诉求落空)。硬编码 LAAP venv python。
-            _py = r"D:\laap-AGI\.venv\Scripts\python.exe"
+            # 2026-08-18: 解释器解析改走 _venv_python()（跨平台 + 随 LAAP_ROOT，
+            # 不再硬编码 D:\laap-AGI 路径）。Windows nssm 环境仍需显式 venv python，
+            # 见 _venv_python 注释（2026-08-16 修复背景）。
+            _py = _venv_python()
             self._process = subprocess.Popen(
                 [_py, "-m", "psi_core.runner", str(self.state_dir), "100"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                creationflags=_CREATE_NO_WINDOW,
             )
             self._mode = self.MODE_PYTHON
             self._running = True

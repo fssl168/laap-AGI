@@ -44,7 +44,7 @@ def _default_db_path() -> Path:
             line = line.strip()
             if line.startswith("PAPER_TRADING_DB_PATH="):
                 p = Path(line.split("=", 1)[1].strip())
-                if os.name != "nt" and _is_windows_drive_abs(str(p)):
+                if os.name != "nt" and is_windows_drive_abs(str(p)):
                     break  # Windows 盘符路径在非 Windows 无效 → 回退项目根相对路径
                 if p.exists():
                     return p
@@ -287,10 +287,23 @@ def main() -> int:
               f"{'pnl':>10}{'pnl%':>8}{'hold':>5}  {'时间'}")
         shown = trades if len(trades) <= args.top else trades[-args.top:]
         for t in shown:
-            print(f"  {t['symbol']:<8}{t['side']:<5}{t['quantity']:>6}"
-                  f"{t['entry_price']:>10.2f}{t['exit_price']:>10.2f}"
-                  f"{t['pnl']:>10.0f}{t['pnl_pct']*100:>7.1f}%{t['hold_days']:>5}"
-                  f"  {_local_ts(t['entry_ts'])}")
+            entry = t["entry_price"] if t["entry_price"] is not None else 0.0
+            exit_p = t["exit_price"]
+            pnl = t["pnl"]
+            pnl_pct = t["pnl_pct"]
+            hold = t["hold_days"]
+            if exit_p is None:
+                # 持仓中（未平仓）：exit/pnl/hold 为空，展示 "持仓中"
+                print(f"  {t['symbol']:<8}{t['side']:<5}{t['quantity']:>6}"
+                      f"{entry:>10.2f}{'持仓中':>10}"
+                      f"{'--':>10}{'--':>8}{'--':>5}"
+                      f"  {_local_ts(t['entry_ts'])}")
+            else:
+                print(f"  {t['symbol']:<8}{t['side']:<5}{t['quantity']:>6}"
+                      f"{entry:>10.2f}{exit_p:>10.2f}"
+                      f"{(pnl or 0.0):>10.0f}{(pnl_pct or 0.0)*100:>7.1f}%"
+                      f"{hold if hold is not None else 0:>5}"
+                      f"  {_local_ts(t['entry_ts'])}")
     else:
         print("（尚无成交记录）")
 

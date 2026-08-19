@@ -1796,6 +1796,22 @@ async def handle_quant_watchlist_remove(request):
         return web.json_response({"error": "internal error"}, status=500)
 
 
+# ── 行情研究 · 自选股富化快照（2026-08-19）──
+async def handle_quant_market_snapshot(request):
+    """GET /v1/quant/market/snapshot?symbols=600519,000001 — 自选股富化行情快照。
+    返回 items=[{symbol,name,price,change_pct,volume,turnover,high,low,open,
+               prev_close,pe,pb,total_mv}...]；数据源失败 fail-closed 返回空 items。"""
+    try:
+        from laap.paper_trading.em_sources import fetch_realtime_snapshot
+        syms = (request.query.get("symbols") or "").split(",")
+        syms = [s.strip() for s in syms if s and s.strip()]
+        snap = fetch_realtime_snapshot(syms) if syms else {}
+        return web.json_response({"items": list(snap.values())})
+    except Exception as e:
+        logger.warning(f"quant_market_snapshot failed: {e}")
+        return web.json_response({"items": []})
+
+
 # ── 行情研究 · 政策自选（政策解读 + 关注股票 CRUD）──
 
 async def handle_quant_policy_analyze(request):
@@ -1904,6 +1920,30 @@ async def handle_quant_policy_picks_match(request):
         logger.warning(f"quant_policy_picks_match failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)
 
+
+async def handle_quant_policy_candidates(request):
+    """GET /v1/quant/policy/candidates — 政策候选池（本池持久化，从记忆链召回）。
+    每只标注 in_watchlist：是否已在自选股。
+    """
+    try:
+        from laap.paper_trading.memory_api import policy_candidates_list
+        limit = int(request.query.get("limit") or 50)
+        return web.json_response(policy_candidates_list(limit))
+    except Exception as e:
+        logger.warning(f"quant_policy_candidates failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
+
+async def handle_quant_policy_batches(request):
+    """GET /v1/quant/policy/batches — 政策候选池（按批次，从记忆链「政策批次」召回）。
+    每次匹配沉淀一个批次；候选池按批次行展示，点详情展开该批候选。
+    """
+    try:
+        from laap.paper_trading.memory_api import policy_batches_list
+        limit = int(request.query.get("limit") or 30)
+        return web.json_response(policy_batches_list(limit))
+    except Exception as e:
+        logger.warning(f"quant_policy_batches failed: {e}")
+        return web.json_response({"error": "internal error"}, status=500)
 
 async def handle_quant_policy_picks_add(request):
     """POST /v1/quant/policy/picks — 添加政策自选股。
@@ -2254,8 +2294,16 @@ async def handle_quant_dashboard_init(request):
             return web.json_response({"error": "internal error"}, status=500)
         conn = db.conn()
         try:
+            # 2026-08-19: "今日信号"面板只显示当日信号。ts 为 epoch 秒(UTC),
+            # 按 Asia/Shanghai 当天 00:00 起过滤, 避免历史买入信号被误当今日信号。
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            _sh = ZoneInfo("Asia/Shanghai")
+            _now = datetime.now(_sh)
+            _day_start = datetime(_now.year, _now.month, _now.day, tzinfo=_sh).timestamp()
             signals = [dict(r) for r in conn.execute(
-                "SELECT * FROM signals ORDER BY ts DESC LIMIT 50").fetchall()]
+                "SELECT * FROM signals WHERE ts >= ? ORDER BY ts DESC LIMIT 50",
+                (_day_start,)).fetchall()]
             trades = [dict(r) for r in conn.execute(
                 "SELECT * FROM trades ORDER BY entry_ts DESC LIMIT 50").fetchall()]
             net_values = [dict(r) for r in conn.execute(
@@ -2279,8 +2327,11 @@ async def handle_quant_dashboard_init(request):
             logger.debug("watchlist symbols lookup failed: %s", e)
         stock_names = {}
         try:
-            from laap.paper_trading.signal_events import fetch_stock_names
-            stock_names = fetch_stock_names(sorted(all_symbols))
+            # 2026-08-19: 外部网络(东财F10)异步预取+缓存。async_fetch_stock_names
+            # 非阻塞: 首读返回缓存(可能空)并触发后台线程预取, 完成后写24h缓存,
+            # 后续/刷新自动拿到简称。彻底不阻塞 dashboard 主流程。
+            from laap.paper_trading.signal_events import async_fetch_stock_names
+            stock_names = async_fetch_stock_names(sorted(all_symbols))
         except Exception as e:  # pragma: no cover - fail-closed
             logger.debug("stock_names lookup failed: %s", e)
         payload = {
@@ -2537,7 +2588,7 @@ async def handle_quant_trades(request):
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM trades ORDER BY entry_ts DESC LIMIT 100"
+                    "SELECT * FROM trades ORDER BY entry_ts DESC"
                 ).fetchall()
         finally:
             conn.close()
@@ -2621,7 +2672,7 @@ async def handle_quant_orders(request):
         conn = db.conn()
         try:
             rows = conn.execute(
-                "SELECT * FROM orders ORDER BY id DESC LIMIT 100").fetchall()
+                "SELECT * FROM orders ORDER BY filled_ts DESC, id DESC LIMIT 100").fetchall()
         finally:
             conn.close()
         return web.json_response([dict(r) for r in rows])
@@ -2757,12 +2808,22 @@ def _get_news_pipeline(auto_order: bool = True):
 
 
 async def handle_quant_news(request):
-    """GET /v1/quant/news?symbol= — 新闻判定 + 联表新闻内容（news_verdicts ⋈ news_items）。"""
+    """GET /v1/quant/news?symbol= — 新闻判定 + 联表新闻内容（news_verdicts ⋈ news_items）。
+    2026-08-19: 加 redis 缓存 + TTL（key=quant:news:<symbol|all>, TTL=10min）。
+    命中直接返回，消除每次打开的 DB 连接 + 查询，弹窗新闻秒出。"""
+    symbol = request.query.get("symbol", "")
+    try:
+        from laap.paper_trading.cache_backend import cache_get, cache_set
+        ck = f"quant:news:{symbol or 'all'}"
+        cached = cache_get(ck)
+        if cached is not None:
+            return web.json_response(cached)
+    except Exception:
+        cached = None
     try:
         db = _get_quant_db()
         if db is None:
             return web.json_response({"error": "internal error"}, status=500)
-        symbol = request.query.get("symbol", "")
         conn = db.conn()
         try:
             if symbol:
@@ -2777,7 +2838,12 @@ async def handle_quant_news(request):
                     "ORDER BY v.ts DESC LIMIT 50").fetchall()
         finally:
             conn.close()
-        return web.json_response([dict(r) for r in rows])
+        data = [dict(r) for r in rows]
+        try:
+            cache_set(ck, data, ttl=600)  # 10min
+        except Exception:
+            pass
+        return web.json_response(data)
     except Exception as e:
         logger.warning(f"quant_news failed: {e}")
         return web.json_response({"error": "internal error"}, status=500)
@@ -2992,6 +3058,14 @@ async def handle_quant_account(request):
             return web.json_response({"error": "internal error"}, status=500)
         ledger = getattr(loop, "ledger", None)
         market = getattr(loop, "market", None)
+        # 现金对账（2026-08-19 修复）：净值快照只在日终落库，盘中平仓/买入
+        # 仅更新内存现金；重启后若直接读内存现金会丢失快照后的现金流。
+        # 按持久化事实重算（最新快照 + 快照后交易现金流），当前进程即时自愈。
+        if ledger is not None:
+            try:
+                ledger.reconcile_cash()
+            except Exception as e:
+                logger.debug(f"account reconcile_cash failed: {e}")
         positions = []
         open_value = 0.0
         unrealized = 0.0
@@ -3026,9 +3100,6 @@ async def handle_quant_account(request):
                 logger.debug(f"account positions failed: {e}")
         conn = db.conn()
         try:
-            nv_row = conn.execute(
-                "SELECT ts, cash, equity, total FROM net_values "
-                "ORDER BY ts DESC LIMIT 1").fetchone()
             nv_rows = conn.execute(
                 "SELECT ts, cash, equity, total FROM net_values "
                 "ORDER BY ts ASC LIMIT 500").fetchall()
@@ -3042,7 +3113,21 @@ async def handle_quant_account(request):
                 today_pnl += float(pnl or 0.0)
         finally:
             conn.close()
-        latest_nv = dict(nv_row) if nv_row else None
+        # latest_net_value：实时快照（现金 + 持仓 MTM），不再返回日终落库的
+        # 陈旧行——总览「总资产」等卡片读它，落后于盘中平仓/买入会显示失真
+        # （2026-08-19 修复）。持仓无实时价（行情降级 fail-closed）时按成本计。
+        live_cash = round(ledger.cash, 2) if ledger is not None else 0.0
+        live_equity = 0.0
+        for p in positions:
+            px = p.get("current_price") if p.get("current_price") is not None \
+                else (p.get("entry_price") or 0.0)
+            live_equity += float(px) * float(p.get("quantity") or 0)
+        latest_nv = {
+            "ts": time.time(),
+            "cash": live_cash,
+            "equity": round(live_equity, 2),
+            "total": round(live_cash + live_equity, 2),
+        }
         return web.json_response({
             "cash": round(ledger.cash, 2) if ledger is not None else None,
             "positions": positions,
@@ -3597,10 +3682,13 @@ def create_app() -> web.Application:
     app.router.add_get("/v1/quant/watchlist", handle_quant_watchlist_get)
     app.router.add_post("/v1/quant/watchlist", handle_quant_watchlist_add)
     app.router.add_delete("/v1/quant/watchlist/{symbol}", handle_quant_watchlist_remove)
+    app.router.add_get("/v1/quant/market/snapshot", handle_quant_market_snapshot)
     app.router.add_post("/v1/quant/policy/analyze", handle_quant_policy_analyze)
     app.router.add_post("/v1/quant/policy/upload", handle_quant_policy_upload)
     app.router.add_get("/v1/quant/policy/picks", handle_quant_policy_picks_get)
     app.router.add_get("/v1/quant/policy/picks/match", handle_quant_policy_picks_match)
+    app.router.add_get("/v1/quant/policy/candidates", handle_quant_policy_candidates)
+    app.router.add_get("/v1/quant/policy/batches", handle_quant_policy_batches)
     app.router.add_post("/v1/quant/policy/picks", handle_quant_policy_picks_add)
     app.router.add_delete("/v1/quant/policy/picks/{id}", handle_quant_policy_picks_remove)
     app.router.add_post("/v1/quant/kline/collect", handle_quant_kline_collect)
@@ -3647,6 +3735,97 @@ def create_app() -> web.Application:
     app.router.add_post("/v1/quant/decide", handle_quant_decide)
     app.router.add_post("/v1/quant/order", handle_quant_order)
     return app
+
+
+# ── 隐藏前端（量化控制台 dashboard/，端口 15173）──────────────
+# 2026-08-19: dashboard/ 静态站点随主应用同启同停；端口由 DASHBOARD_PORT
+# 配置（默认 15173，.env 已设），置 0/空 可禁用；目录缺失或端口冲突仅告警，
+# 不拖垮主服务（fail-soft）。
+
+_DASHBOARD_DIR = LAAP_ROOT / "dashboard"
+
+
+def _dashboard_port() -> int:
+    """隐藏前端端口（DASHBOARD_PORT，默认 15173）；≤0 表示不启动。"""
+    raw = (os.environ.get("DASHBOARD_PORT") or "15173").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("DASHBOARD_PORT=%r 非整数，隐藏前端不启动", raw)
+        return 0
+
+
+def _frontend_config_script(api_port: int) -> str:
+    """向前端注入后端地址与 API Key（读 env 单源，不写死；浏览器侧运行）。
+
+    前端 api.js / ws.js 在加载时读取 window.LAAP_API_BASE / LAAP_API_KEY，
+    注入在 </head> 之前，保证先于所有面板脚本执行。API Key 会暴露到浏览器侧
+    （本地/内网前端专用，等同 .env 同机可读），不跨主机发送。
+    """
+    key = os.environ.get("LAAP_API_KEY", "").strip()
+    # JS 字符串转义（防引号/换行/</script> 注入）
+    key_js = (key.replace("\\", "\\\\").replace('"', '\\"')
+              .replace("\n", "\\n").replace("<", "\\u003c"))
+    return (
+        "<script>\n"
+        "window.LAAP_API_BASE = 'http://' + (window.location.hostname || '127.0.0.1')"
+        f" + ':{api_port}';\n"
+        f"window.LAAP_API_KEY = \"{key_js}\";\n"
+        "</script>"
+    )
+
+
+def _create_dashboard_app(api_port: int) -> web.Application:
+    """量化控制台静态站点应用：/ → index.html（注入后端配置），/static → 静态资源。"""
+    app = web.Application()
+    index = _DASHBOARD_DIR / "index.html"
+    if index.is_file():
+        # 启动时读一次并注入配置（运行时改前端文件需重启生效，静态站点惯例）
+        index_html = index.read_text(encoding="utf-8")
+        html = index_html.replace(
+            "</head>", _frontend_config_script(api_port) + "</head>", 1)
+
+        async def _index(request: web.Request) -> web.Response:
+            return web.Response(text=html, content_type="text/html", charset="utf-8")
+
+        app.router.add_get("/", _index)
+        app.router.add_get("/index.html", _index)
+    static_dir = _DASHBOARD_DIR / "static"
+    if static_dir.is_dir():
+        app.router.add_static("/static/", static_dir, show_index=False)
+    return app
+
+
+def _attach_dashboard(main_app: web.Application, host: str, api_port: int) -> None:
+    """主服务启动/停止时同启同停隐藏前端（15173 量化控制台，fail-soft）。"""
+    port = _dashboard_port()
+    if port <= 0:
+        logger.info("隐藏前端 dashboard/ 未启动（DASHBOARD_PORT=%s）", port)
+        return
+    dash_app = _create_dashboard_app(api_port)
+    if not dash_app.router.routes():
+        logger.warning("隐藏前端 dashboard/ 目录缺失，跳过 %s 服务", port)
+        return
+
+    async def _start_dashboard(_app: web.Application) -> None:
+        runner = web.AppRunner(dash_app, access_log=None)
+        try:
+            await runner.setup()
+            site = web.TCPSite(runner, host, port)
+            await site.start()
+            _app["dashboard_runner"] = runner
+            logger.info("隐藏前端 dashboard/ 已启动: http://%s:%s/", host, port)
+        except Exception as exc:  # 端口冲突等 → 仅告警，不拖垮主服务
+            logger.warning("隐藏前端 %s 启动失败（主服务不受影响）: %s", port, exc)
+            await runner.cleanup()
+
+    async def _stop_dashboard(_app: web.Application) -> None:
+        runner = _app.get("dashboard_runner")
+        if runner is not None:
+            await runner.cleanup()
+
+    main_app.on_startup.append(_start_dashboard)
+    main_app.on_shutdown.append(_stop_dashboard)
 
 
 def main():
@@ -3699,6 +3878,8 @@ def main():
     _start_event_orchestrator()
 
     app = create_app()
+    # 隐藏前端（15173 量化控制台）随主服务同启同停
+    _attach_dashboard(app, host, port)
     logger.info(f"LAAP Brain API starting on {host}:{port}")
     logger.info(f"OpenAI-compatible endpoint: http://localhost:{port}/v1")
     web.run_app(app, host=host, port=port)

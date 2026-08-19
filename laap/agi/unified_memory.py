@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import time
 import math
+import json
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from collections import deque
 
@@ -29,6 +32,11 @@ from .memory_system import (
 
 
 class UnifiedMemory:
+    # 记忆持久化：跨进程/重启保留 episodic/semantic/procedural 记忆。
+    # 路径：<laap>/data/unified_memory.json（相对本文件向上两级 → laap/）
+    PERSIST_PATH = (Path(__file__).resolve().parent.parent / "data"
+                    / "unified_memory.json")
+
     def __init__(self):
         self.working_memory: deque[Dict[str, Any]] = deque(maxlen=7)
         self.episodic_memory = EpisodicMemory()
@@ -44,6 +52,8 @@ class UnifiedMemory:
             "arousal": 0.0,
             "dominance": 0.5,
         }
+        # 启动即恢复已持久化的记忆（若无文件则保持空，不抛错）
+        self.load()
 
     def add_to_working_memory(
         self,
@@ -107,6 +117,9 @@ class UnifiedMemory:
             source_type="experience",
             metadata={"trace_id": episode_trace.trace_id},
         )
+
+        # 2026-08-19: 写后即持久化，保证情景/语义/程序记忆跨重启保留
+        self.save()
 
         return {
             "episode_id": episode_trace.trace_id,
@@ -341,6 +354,17 @@ class UnifiedMemory:
         ]
         recent.sort(key=lambda t: t.timestamp, reverse=True)
 
+        # 工作执行记忆去重: 相同 content 只保留最新一条, 并标注重复次数
+        seen = set()
+        rows = []
+        cnt = {}
+        for t in recent:
+            cnt[t.content] = cnt.get(t.content, 0) + 1
+        for t in recent:
+            if t.content in seen:
+                continue
+            seen.add(t.content)
+            rows.append(t)
         return [{
             "id": t.trace_id,
             "content": t.content,
@@ -348,7 +372,8 @@ class UnifiedMemory:
             "emotional_valence": t.emotional_valence,
             "emotional_arousal": t.emotional_arousal,
             "strength": t.strength,
-        } for t in recent[:max_results]]
+            "repeat": cnt[t.content],
+        } for t in rows[:max_results]]
 
     def get_related_concepts(
         self,
@@ -417,3 +442,132 @@ class UnifiedMemory:
             "dream_count": len(self.consolidator.dream_reports),
             "emotional_state": self.emotional_state.copy(),
         }
+
+    # ── 记忆持久化（save/load）────────────────────────────
+    def _serialize(self) -> Dict[str, Any]:
+        """把 episodic/semantic/procedural 记忆序列化为可 JSON 化的 dict。"""
+        return {
+            "episodic": [
+                {
+                    "trace_id": t.trace_id,
+                    "memory_type": t.memory_type.value,
+                    "content": t.content,
+                    "timestamp": t.timestamp,
+                    "emotional_valence": t.emotional_valence,
+                    "emotional_arousal": t.emotional_arousal,
+                    "rehearsal_count": t.rehearsal_count,
+                    "last_accessed": t.last_accessed,
+                    "associations": list(t.associations),
+                    "source_episode": t.source_episode,
+                    "confidence": t.confidence,
+                    "decay_rate": t.decay_rate,
+                }
+                for t in self.episodic_memory.episodes
+            ],
+            "semantic": {
+                "concepts": dict(self.semantic_memory.concepts),
+                "relations": [
+                    {"subject": k, "edges": [list(e) for e in v]}
+                    for k, v in self.semantic_memory.relations.items()
+                ],
+                "hierarchy": {k: list(v)
+                              for k, v in self.semantic_memory.hierarchy.items()},
+            },
+            "procedural": {
+                "skills": dict(self.procedural_memory.skills),
+                "habits": dict(self.procedural_memory.habits),
+                "automated_responses": dict(
+                    self.procedural_memory.automated_responses),
+            },
+        }
+
+    def save(self) -> bool:
+        """原子写持久化文件。失败只记录日志，不抛错（fail-closed）。"""
+        try:
+            path = self.PERSIST_PATH
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(self._serialize(), ensure_ascii=False, indent=1),
+                encoding="utf-8")
+            os.replace(tmp, path)
+            return True
+        except Exception as e:  # noqa: BLE001
+            try:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "UnifiedMemory.save failed: %s", e)
+            except Exception:
+                pass
+            return False
+
+    def load(self) -> bool:
+        """从持久化文件恢复记忆（含重建索引）。文件缺失/损坏则静默保持空。"""
+        path = self.PERSIST_PATH
+        if not path.exists():
+            return False
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 损坏/空 → 忽略
+            return False
+        try:
+            # episodic
+            eps = data.get("episodic") or []
+            new_episodes = []
+            for d in eps:
+                try:
+                    mt = MemoryType(str(d.get("memory_type") or "episodic"))
+                except Exception:
+                    mt = MemoryType.EPISODIC
+                new_episodes.append(
+                    MemoryTrace(
+                        trace_id=d.get("trace_id", f"ep_{time.time()}"),
+                        memory_type=mt,
+                        content=d.get("content", ""),
+                        timestamp=float(d.get("timestamp", time.time())),
+                        emotional_valence=float(
+                            d.get("emotional_valence", 0.0)),
+                        emotional_arousal=float(d.get("emotional_arousal", 0.0)),
+                        rehearsal_count=int(d.get("rehearsal_count", 0)),
+                        last_accessed=float(
+                            d.get("last_accessed", time.time())),
+                        associations=list(d.get("associations", []) or []),
+                        source_episode=d.get("source_episode"),
+                        confidence=float(d.get("confidence", 0.5)),
+                        decay_rate=float(d.get("decay_rate", 0.01)),
+                    ))
+            self.episodic_memory.episodes = new_episodes
+            # 重建时间/情感索引
+            self.episodic_memory._time_index.clear()
+            self.episodic_memory._emotion_index.clear()
+            for t in new_episodes:
+                self.episodic_memory._time_index[t.timestamp].append(
+                    t.trace_id)
+                self.episodic_memory._emotion_index[
+                    self.episodic_memory._emotion_key(
+                        t.emotional_valence, t.emotional_arousal)
+                ].append(t.trace_id)
+            # semantic
+            sem = data.get("semantic") or {}
+            self.semantic_memory.concepts = dict(sem.get("concepts") or {})
+            self.semantic_memory.hierarchy = {
+                k: list(v) for k, v in (sem.get("hierarchy") or {}).items()}
+            rel = {}
+            for r in sem.get("relations") or []:
+                rel[str(r.get("subject"))] = [tuple(e) for e in r.get("edges", [])]
+            self.semantic_memory.relations = rel
+            # procedural
+            pro = data.get("procedural") or {}
+            self.procedural_memory.skills = dict(pro.get("skills") or {})
+            self.procedural_memory.habits = dict(pro.get("habits") or {})
+            self.procedural_memory.automated_responses = dict(
+                pro.get("automated_responses") or {})
+            return True
+        except Exception as e:  # noqa: BLE001
+            try:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "UnifiedMemory.load restore failed: %s", e)
+            except Exception:
+                pass
+            return False
